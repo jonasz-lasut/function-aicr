@@ -1,0 +1,24 @@
+apiVersion: aicr.fn.crossplane.io/v1beta1
+kind: Input
+criteriaFrom:
+  accelerator: spec.gpuType
+  service: spec.cloud
+  intent: spec.purpose
+providerConfigRef:
+  name: default-cluster
+providerConfigRefFrom:
+  kind: spec.providerConfigKind
+  name: spec.providerConfigName
+skipDeploymentOrder: true
+skipComponents:
+- name: nfd
+- name: network-operator
+- name: nodewright-operator
+- name: prometheus-operator-crds
+- name: kube-prometheus-stack
+- name: gpu-operator
+- name: k8s-ephemeral-storage-metrics
+- name: nvidia-dra-driver-gpu
+- name: nvsentinel
+- name: prometheus-adapter
+- name: kai-scheduler

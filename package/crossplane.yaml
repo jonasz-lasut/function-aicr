@@ -1,0 +1,22 @@
+---
+apiVersion: meta.pkg.crossplane.io/v1
+kind: Function
+metadata:
+  name: function-aicr
+  annotations:
+    meta.crossplane.io/maintainer: Jonasz Małecki <jonaszlasut@proton.me>
+    meta.crossplane.io/source: github.com/jonasz-lasut/function-aicr
+    meta.crossplane.io/license: Apache-2.0
+    meta.crossplane.io/description: A composition function that resolves an NVIDIA AICR recipe into provider-helm Releases and provider-kubernetes Objects
+    meta.crossplane.io/readme: |
+      This composition function resolves an NVIDIA AI Cluster Runtime (AICR) recipe from
+      the criteria in its input and expands it into namespaced provider-helm
+      Releases and provider-kubernetes Objects targeting a workload cluster.
+      Every composed resource is validated against the provider CRD schema
+      Crossplane resolves for it. Components are emitted in AICR's dependency
+      order: a component is withheld until its dependencies report Ready. See the
+      [README](https://github.com/jonasz-lasut/function-aicr)
+      for examples and documentation.
+spec:
+  capabilities:
+  - composition

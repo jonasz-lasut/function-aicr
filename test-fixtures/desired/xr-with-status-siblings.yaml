@@ -1,0 +1,8 @@
+apiVersion: example.org/v1
+kind: GPUStack
+metadata:
+  name: cs-resolve
+  namespace: default
+status:
+  other: keep
+  recipeName: stale

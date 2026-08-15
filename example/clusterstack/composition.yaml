@@ -1,0 +1,30 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: clusterstacks.example.org
+spec:
+  compositeTypeRef:
+    apiVersion: example.org/v1alpha1
+    kind: ClusterStack
+  mode: Pipeline
+  pipeline:
+  - step: aicr
+    functionRef:
+      name: function-aicr
+    input:
+      apiVersion: aicr.fn.crossplane.io/v1beta1
+      kind: Input
+      criteriaFrom:
+        accelerator: spec.accelerator
+        service: spec.service
+        intent: spec.intent
+        os: spec.os
+        platform: spec.platform
+      providerConfigRef:
+        kind: ClusterProviderConfig
+        name: gpu-cluster
+      target:
+        fieldPath: status.aicr
+  - step: auto-ready
+    functionRef:
+      name: function-auto-ready

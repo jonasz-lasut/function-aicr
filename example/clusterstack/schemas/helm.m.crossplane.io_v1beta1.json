@@ -1,0 +1,92 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "helm.m.crossplane.io",
+    "version": "v1beta1"
+  },
+  "paths": {},
+  "components": {
+    "schemas": {
+      "com.crossplane.helm.v1beta1.Release": {
+        "type": "object",
+        "description": "STAND-IN SCHEMA. Not the real provider-helm CRD schema. See example/clusterstack/README.md.",
+        "x-kubernetes-group-version-kind": [
+          {
+            "group": "helm.m.crossplane.io",
+            "version": "v1beta1",
+            "kind": "Release"
+          }
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "spec": {
+            "type": "object",
+            "required": [
+              "forProvider",
+              "providerConfigRef"
+            ],
+            "properties": {
+              "forProvider": {
+                "type": "object",
+                "required": [
+                  "chart"
+                ],
+                "properties": {
+                  "chart": {
+                    "type": "object",
+                    "required": [
+                      "name"
+                    ],
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "repository": {
+                        "type": "string"
+                      },
+                      "version": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "namespace": {
+                    "type": "string"
+                  },
+                  "wait": {
+                    "type": "boolean"
+                  },
+                  "values": {
+                    "type": "object",
+                    "x-kubernetes-preserve-unknown-fields": true
+                  }
+                }
+              },
+              "providerConfigRef": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

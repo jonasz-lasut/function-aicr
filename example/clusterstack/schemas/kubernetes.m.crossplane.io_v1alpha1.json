@@ -1,0 +1,70 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "kubernetes.m.crossplane.io",
+    "version": "v1alpha1"
+  },
+  "paths": {},
+  "components": {
+    "schemas": {
+      "com.crossplane.kubernetes.v1alpha1.Object": {
+        "type": "object",
+        "description": "STAND-IN SCHEMA. Not the real provider-kubernetes CRD schema. See example/clusterstack/README.md.",
+        "x-kubernetes-group-version-kind": [
+          {
+            "group": "kubernetes.m.crossplane.io",
+            "version": "v1alpha1",
+            "kind": "Object"
+          }
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "spec": {
+            "type": "object",
+            "required": [
+              "forProvider",
+              "providerConfigRef"
+            ],
+            "properties": {
+              "forProvider": {
+                "type": "object",
+                "required": [
+                  "manifest"
+                ],
+                "properties": {
+                  "manifest": {
+                    "type": "object",
+                    "x-kubernetes-embedded-resource": true,
+                    "x-kubernetes-preserve-unknown-fields": true
+                  }
+                }
+              },
+              "providerConfigRef": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,153 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: inputs.aicr.fn.crossplane.io
+spec:
+  group: aicr.fn.crossplane.io
+  names:
+    categories:
+    - crossplane
+    kind: Input
+    listKind: InputList
+    plural: inputs
+    singular: input
+  scope: Namespaced
+  versions:
+  - name: v1beta1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          Input configures how function-aicr resolves an NVIDIA AICR recipe and
+          expands it into composed provider-helm Releases and provider-kubernetes
+          Objects.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          componentOverrides:
+            additionalProperties:
+              description: A ComponentOverride customizes one resolved recipe component.
+              properties:
+                namespace:
+                  type: string
+                values:
+                  description: Values are deep-merged over the values the recipe resolved.
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                version:
+                  type: string
+              type: object
+            description: ComponentOverrides customize resolved components, keyed by
+              component name.
+            type: object
+          criteria:
+            description: |-
+              Criteria are the literal AICR recipe criteria. Any field may be
+              overridden per composite resource via CriteriaFrom.
+            properties:
+              accelerator:
+                type: string
+              intent:
+                type: string
+              os:
+                type: string
+              platform:
+                type: string
+              service:
+                type: string
+            type: object
+          criteriaFrom:
+            description: |-
+              CriteriaFrom names field paths on the observed composite resource whose
+              values take precedence over the matching Criteria field.
+            properties:
+              accelerator:
+                type: string
+              intent:
+                type: string
+              os:
+                type: string
+              platform:
+                type: string
+              service:
+                type: string
+            type: object
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          providerConfigRef:
+            description: |-
+              ProviderConfigRef references the provider config holding credentials for
+              the target cluster. It is stamped onto every composed Release and Object.
+              Either it or ProviderConfigRefFrom must supply a name.
+            properties:
+              kind:
+                default: ClusterProviderConfig
+                enum:
+                - ClusterProviderConfig
+                - ProviderConfig
+                type: string
+              name:
+                type: string
+            type: object
+          providerConfigRefFrom:
+            description: |-
+              ProviderConfigRefFrom names field paths on the observed composite
+              resource whose values take precedence over the matching ProviderConfigRef
+              field, so one Composition can target the cluster each composite resource
+              names.
+            properties:
+              kind:
+                type: string
+              name:
+                type: string
+            type: object
+          skipComponents:
+            description: SkipComponents are excluded from the resolved recipe.
+            items:
+              description: A ComponentRef names an AICR recipe component.
+              properties:
+                name:
+                  type: string
+              required:
+              - name
+              type: object
+            type: array
+          skipDeploymentOrder:
+            description: |-
+              SkipDeploymentOrder deploys every component at once rather than
+              withholding a component until its dependencies report Ready.
+            type: boolean
+          target:
+            description: |-
+              Target names where on the desired composite resource the resolved-recipe
+              summary is written. When unset no status is written.
+            properties:
+              fieldPath:
+                description: |-
+                  FieldPath names the object on the composite resource that receives the
+                  summary keys (recipeName, recipeVersion, componentCount,
+                  deployedComponents). It must begin with "status". Keys already present
+                  at the path are preserved; the summary keys are set alongside them.
+                pattern: ^status(\..+)?$
+                type: string
+            required:
+            - fieldPath
+            type: object
+        type: object
+    served: true
+    storage: true
