@@ -1,0 +1,59 @@
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: clusterstacks.example.org
+spec:
+  group: example.org
+  names:
+    kind: ClusterStack
+    plural: clusterstacks
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    served: true
+    referenceable: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            required:
+            - accelerator
+            - service
+            - intent
+            properties:
+              accelerator:
+                type: string
+              service:
+                type: string
+              intent:
+                type: string
+              os:
+                type: string
+              platform:
+                type: string
+          status:
+            type: object
+            properties:
+              aicr:
+                type: object
+                properties:
+                  recipeName:
+                    type: string
+                  recipeVersion:
+                    type: string
+                  componentCount:
+                    type: integer
+                  deployedComponents:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                      - name
+                      properties:
+                        name:
+                          type: string
+                    x-kubernetes-list-type: map
+                    x-kubernetes-list-map-keys:
+                    - name

@@ -1,0 +1,9 @@
+# Observed cert-manager Release reporting Ready, so the gate admits gpu-operator.
+apiVersion: helm.m.crossplane.io/v1beta1
+kind: Release
+metadata:
+  name: cert-manager
+status:
+  conditions:
+    - type: Ready
+      status: "True"

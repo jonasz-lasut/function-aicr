@@ -1,0 +1,11 @@
+apiVersion: aicr.fn.crossplane.io/v1beta1
+kind: Input
+criteria:
+  accelerator: h100
+  service: kind
+  intent: training
+providerConfigRef:
+  name: gpu-cluster
+componentOverrides:
+  gpu-operator:
+    values: not-an-object

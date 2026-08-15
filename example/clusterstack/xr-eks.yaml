@@ -1,0 +1,13 @@
+# An EKS tier: besides Releases, this recipe carries manifest files — the
+# manifest-only nodewright-customizations component renders its Skyhook tuning
+# CR into a provider-kubernetes Object — so rendering it needs both schemas
+# under schemas/.
+apiVersion: example.org/v1alpha1
+kind: ClusterStack
+metadata:
+  name: gpu-training-stack-eks
+  namespace: default
+spec:
+  accelerator: h100
+  service: eks
+  intent: training

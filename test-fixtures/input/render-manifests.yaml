@@ -1,0 +1,25 @@
+# The eks tier carries the manifest-only nodewright-customizations component,
+# whose only manifest is a Helm-style template rendered from the recipe values.
+apiVersion: aicr.fn.crossplane.io/v1beta1
+kind: Input
+criteria:
+  accelerator: h100
+  service: eks
+  intent: training
+providerConfigRef:
+  kind: ClusterProviderConfig
+  name: gpu-cluster
+skipDeploymentOrder: true
+skipComponents:
+- name: aws-ebs-csi-driver
+- name: aws-efa
+- name: cert-manager
+- name: gpu-operator
+- name: k8s-ephemeral-storage-metrics
+- name: kai-scheduler
+- name: kube-prometheus-stack
+- name: nfd
+- name: nvidia-dra-driver-gpu
+- name: nvsentinel
+- name: prometheus-adapter
+- name: prometheus-operator-crds
