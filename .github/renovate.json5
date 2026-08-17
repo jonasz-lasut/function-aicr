@@ -8,11 +8,13 @@
     // The repo uses conventional commits; a routine bump is a chore, not a fix.
     ':semanticCommitTypeAll(chore)',
   ],
-  // The only dependency surfaces: go.mod, the workflows (actions and the CLI
-  // versions in their env), and the Function package refs under example/.
-  // go.mod is the single source of truth for the Go version (workflows read
-  // it), and the Dockerfile floats on golang:1 + distroless:nonroot by design.
-  enabledManagers: ['gomod', 'github-actions', 'crossplane', 'custom.regex'],
+  // The dependency surfaces: go.mod, the workflows (actions and the CLI
+  // versions in their env), the Function package refs under example/, and
+  // the Dockerfile. go.mod is the single source of truth for the Go version
+  // (workflows read it), so the golang build stage floats on golang:1 by
+  // design; the runtime base (gcr.io/distroless/static-debian13:nonroot) is
+  // digest-pinned and the dockerfile manager keeps that digest current.
+  enabledManagers: ['gomod', 'github-actions', 'crossplane', 'dockerfile', 'custom.regex'],
   // CI's check-diff runs `go mod tidy` and fails on a dirty tree, so tidy in
   // the same commit; update import paths on /vN major bumps.
   postUpdateOptions: ['gomodTidy', 'gomodUpdateImportPaths'],
@@ -114,5 +116,17 @@
 
     // Package refs in the render example.
     { matchManagers: ['crossplane'], groupName: 'examples' },
+
+    // Dockerfile: the golang build stage follows go.mod, not Renovate; the
+    // runtime base is pinned to a digest that moves with distroless's
+    // rebuilds of the `nonroot` tag — one PR per digest bump, so a rebuild
+    // that breaks the image is judged on its own.
+    { matchManagers: ['dockerfile'], matchPackageNames: ['golang'], enabled: false },
+    {
+      matchManagers: ['dockerfile'],
+      matchPackageNames: ['gcr.io/distroless/static-debian13'],
+      pinDigests: true,
+      groupName: 'runtime image',
+    },
   ],
 }
