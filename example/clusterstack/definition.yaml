@@ -43,6 +43,8 @@ spec:
                     type: string
                   recipeVersion:
                     type: string
+                  recipeSource:
+                    type: string
                   componentCount:
                     type: integer
                   deployedComponents:
