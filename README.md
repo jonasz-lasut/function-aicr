@@ -86,6 +86,62 @@ leaves the XR's own readiness to the pipeline.
 Releases are published as `ghcr.io/jonasz-lasut/function-aicr`, mirrored at
 `xpkg.upbound.io/jonasz-lasut/function-aicr`.
 
+## Recipe source
+
+By default the function serves the recipe catalog embedded in the
+`github.com/NVIDIA/aicr` module it was built with — the module version *is*
+the catalog version, and nothing is fetched at runtime.
+
+Two flags overlay that catalog with a digest-pinned OCI recipe artifact,
+pulled **once at startup** so no reconcile ever waits on a registry:
+
+```
+--recipe-oci-repository=ghcr.io/acme/aicr-recipes
+--recipe-oci-digest=sha256:8ac7f6d54e8bcbf074f156a11f2c8c1ca6dcafed85e880e99a3126c0810cd66f
+```
+
+Set them (or the `RECIPE_OCI_REPOSITORY` / `RECIPE_OCI_DIGEST` environment
+variables) through a [DeploymentRuntimeConfig][deployment-runtime-config]
+referenced by the Function package:
+
+```yaml
+apiVersion: pkg.crossplane.io/v1beta1
+kind: DeploymentRuntimeConfig
+metadata:
+  name: function-aicr
+spec:
+  deploymentTemplate:
+    spec:
+      selector: {}
+      template:
+        spec:
+          containers:
+          - name: package-runtime
+            args:
+            - --recipe-oci-repository=ghcr.io/acme/aicr-recipes
+            - --recipe-oci-digest=sha256:8ac7f6d54e8bcbf074f156a11f2c8c1ca6dcafed85e880e99a3126c0810cd66f
+```
+
+The rules, all AICR's own:
+
+- **Digest-pinned only.** The selector must be the artifact's immutable
+  `sha256:` manifest digest — never a tag — so mutable registry state cannot
+  change what the function deploys. Rolling the catalog forward is a new
+  digest, and rolling back is the old one.
+- **An overlay, not a replacement.** The artifact's files are layered over
+  the embedded catalog (`registry.yaml` is merged), so the artifact only
+  needs to carry what differs. The resolved-recipe summary reports the
+  overlay as `recipeSource` next to the embedded `recipeVersion`.
+- **Fail fast, no fallback.** A pull or validation failure exits the function
+  rather than silently serving embedded data; the pod's restart backoff and
+  logs make the failure visible.
+- **Registry access.** Credentials are read from the Docker config
+  (`$DOCKER_CONFIG/config.json` — mount a `dockerconfigjson` Secret and set
+  `DOCKER_CONFIG`), connections are HTTPS with the image's CA bundle (set
+  `SSL_CERT_FILE` for a private CA), and extraction needs a writable
+  temporary directory (`TMPDIR`; mount an `emptyDir` when the container
+  filesystem is read-only).
+
 ## Why Crossplane?
 
 AICR renders a recipe into Helm, Argo CD, Flux or Helmfile bundles. Running
@@ -219,7 +275,7 @@ recipe to that path on the desired composite resource:
 status:
   aicr:
     recipeName: h100-kind-training
-    recipeVersion: v0.19.0
+    recipeVersion: v0.20.0
     componentCount: 3
     deployedComponents:
     - name: cert-manager
@@ -227,9 +283,11 @@ status:
 ```
 
 `recipeVersion` is the `github.com/NVIDIA/aicr` module version the function
-was built with — what pins the embedded recipe data. `deployedComponents`
-lists, in AICR's deployment order, only the components the gate is not
-withholding. The keys are set individually, so keys already present at the
+was built with — what pins the embedded recipe data. When the function serves
+an [OCI recipe source](#recipe-source), a `recipeSource` key carries its
+`repository@digest` identity, since the module version alone no longer
+describes the overlaid catalog. `deployedComponents` lists, in AICR's
+deployment order, only the components the gate is not withholding. The keys are set individually, so keys already present at the
 path survive. Crossplane prunes any status field the XRD does not declare,
 so the XRD must carry a matching subschema — see
 [`example/clusterstack/definition.yaml`](example/clusterstack/definition.yaml).
@@ -330,3 +388,4 @@ Apache 2.0. See [LICENSE](LICENSE) for details.
 [provider-helm]: https://github.com/crossplane-contrib/provider-helm
 [provider-kubernetes]: https://github.com/crossplane-contrib/provider-kubernetes
 [auto-ready]: https://github.com/crossplane-contrib/function-auto-ready
+[deployment-runtime-config]: https://docs.crossplane.io/latest/packages/providers/#runtime-configuration

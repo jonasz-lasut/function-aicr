@@ -15,6 +15,7 @@ The main goal is to make an AICR recipe a **continuously reconciled Crossplane A
 - **Ordered rollout**: components are withheld until what AICR orders before them is observed `Ready`
 - **Manifest files as `Object`s**: AICR's Helm-templated manifest files are rendered with AICR's own renderer and wrapped in provider-kubernetes `Object`s
 - **A resolved-recipe summary** written to a `status` field path the user chooses
+- **An optional OCI recipe source**: the `--recipe-oci-*` flags overlay the embedded catalog with a digest-pinned recipe artifact, pulled once at startup
 
 ### Relationship to AICR
 
@@ -25,7 +26,7 @@ AICR (`github.com/NVIDIA/aicr`) is a CLI, API server and Go library that resolve
 | Criteria on the command line | Criteria in the function `Input`, or on the observed XR via field paths |
 | Renders a bundle for an external deployer to apply once | Returns desired `Release`s and `Object`s to Crossplane, which reconciles them continuously |
 | Deployment order left to the deployer's tooling (Argo waves, Helmfile needs, ...) | Enforced by a gate that reads the providers' observed `Ready` conditions |
-| Reads recipe data from its embedded FS or an OCI source | Reads the embedded FS of the pinned `github.com/NVIDIA/aicr` module version (an OCI source is a future option) |
+| Reads recipe data from its embedded FS or an OCI source | Reads the embedded FS of the pinned `github.com/NVIDIA/aicr` module version; the `--recipe-oci-*` flags overlay it with a digest-pinned OCI recipe artifact pulled once at startup |
 
 The pinned module version **is** the recipe catalog version. Bumping it changes what the function deploys (see [Bumping the AICR module](#bumping-the-aicr-module)).
 
@@ -69,7 +70,8 @@ Crossplane RunFunctionResponse (desired resources + requirements + XR status)
 ```
 fn.go                             RunFunction, the stack type (compose, gate, summary),
                                   managedComponents, parseOverrides, setStatus, recipeName
-main.go                           kong CLI, embedded DataProvider, aicrVersion/moduleVersion
+main.go                           kong CLI, DataProvider (embedded, or the OCI overlay from
+                                  the --recipe-oci-* flags), aicrVersion/moduleVersion
     ↓
 input/v1beta1/input.go            Input, Criteria, CriteriaFrom, ProviderConfigRef(From),
                                   ComponentRef, ComponentOverride, Target
@@ -148,6 +150,10 @@ type Input struct {
 
 The user-facing field reference lives in `README.md` ("Input reference"); keep it in sync with `input/v1beta1/input.go`.
 
+### The recipe source
+
+The recipe catalog is function-level configuration, not part of the `Input`: by default the FS embedded in the pinned `github.com/NVIDIA/aicr` module, optionally overlaid with a digest-pinned OCI recipe artifact via the `--recipe-oci-repository` / `--recipe-oci-digest` flags (`RECIPE_OCI_REPOSITORY` / `RECIPE_OCI_DIGEST`). `newDataProvider` (main.go) pulls the artifact **once at startup** through `aicr/pkg/recipe/ocisource` — never per request, so no reconcile waits on a registry — and a pull failure exits the process rather than falling back to embedded data. `ociPullOptions` requires both flags together and an immutable `sha256:` manifest digest (AICR refuses to materialize tag-selected artifacts anyway). The overlay's `repository@digest` identity is threaded through `Function.recipeSource` into the summary. Registry credentials come from the Docker config (`DOCKER_CONFIG`), connections are HTTPS-only, and extraction needs a writable temp dir (`TMPDIR`); see the README's "Recipe source" section for the deployment wiring.
+
 ### Criteria and provider-config resolution
 
 `internal/resolve` applies four rules per field, for `criteria.*` and `providerConfigRef.*` alike:
@@ -194,7 +200,7 @@ Two invariants: readiness is read from `observed`, never from `desired[...].Read
 
 ### The resolved-recipe summary
 
-`stack.summary` returns `recipeName` (`accelerator-service[-os]-intent[-platform]`, unstated dimensions omitted), `recipeVersion` (the aicr module version), `componentCount` and `deployedComponents` (managed components whose composed resources are all present in `desired`, in `DeploymentOrder`). `setStatus` sets each key individually under `target.fieldPath` on the desired XR read from the request, so sibling keys survive and the function never needs the XR's kind. Crossplane prunes fields the XRD does not declare — the example XRD declares `status.aicr`.
+`stack.summary` returns `recipeName` (`accelerator-service[-os]-intent[-platform]`, unstated dimensions omitted), `recipeVersion` (the aicr module version), `recipeSource` (the OCI overlay's `repository@digest`, present only when the function serves one), `componentCount` and `deployedComponents` (managed components whose composed resources are all present in `desired`, in `DeploymentOrder`). `setStatus` sets each key individually under `target.fieldPath` on the desired XR read from the request, so sibling keys survive and the function never needs the XR's kind. Crossplane prunes fields the XRD does not declare — the example XRD declares `status.aicr`.
 
 ## Development Guide
 
@@ -373,6 +379,10 @@ AICR's catalog decides which combinations exist. Unstated dimensions select the 
 
 Composed resource names derive only from the component and manifest document, because the gate correlates observed and desired by name and the Helm release names would collide in the target cluster anyway.
 
+### The OCI Recipe Source Is Function-Level and Pulled Once at Startup
+
+AICR's pull budget is minutes (staging, digest authorization, extraction) while a `RunFunction` deadline is seconds, so a per-request source would need an async provider cache and a "still fetching" response path. Instead the `--recipe-oci-*` flags configure one catalog per function deployment, pulled by `ocisource.New` before `function.Serve`: reconciles never touch the network, and a bad source crashloops visibly instead of silently serving embedded data (a fallback would change what the function deploys). Only an immutable `sha256:` digest is accepted — AICR refuses to materialize tag-selected artifacts, and a tag would let registry state change deployments without a config change. The overlay is layered over the embedded catalog, so `TestCatalogInvariants` guards only the embedded base — an overlay can break its shape assumptions (a manifest that does not render is Fatal at compose time; a manifest-document name collision is not separately guarded) — and the summary therefore reports `recipeSource` next to `recipeVersion`.
+
 ## Key Reference Documents
 
 - `README.md` — user-facing behaviour, the Input reference, the required-schemas contract and gating rules
@@ -406,6 +416,10 @@ Either the schemas are still being resolved (the function returns no resources u
 ### "delaying X until dependency Y is ready" forever
 
 Y is not reaching `Ready` in the target cluster (check the `Release`/`Object` in the provider), or — if you changed the gate — Y is manifest-only and is being looked up under its bare name.
+
+### "cannot pull the OCI recipe source …" at startup
+
+The function exits (and the pod crashloops) when the `--recipe-oci-*` source cannot be pulled or validated. `--recipe-oci-digest` must be the artifact's immutable `sha256:` manifest digest, not a tag. An auth error means the Docker config (`DOCKER_CONFIG`) lacks credentials for the registry; a TLS error means the registry's CA is not in the trust store (`SSL_CERT_FILE`); "invalid materialized OCI recipe catalog" means the artifact is not a recipe tree rooted at `registry.yaml`. There is deliberately no fallback to the embedded catalog.
 
 ### "no recipe provides os 'ubuntu' for criteria(…)" / "invalid AICR recipe criteria"
 

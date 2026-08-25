@@ -80,6 +80,11 @@ type Function struct {
 	// recipeVersion: the github.com/NVIDIA/aicr module version, since that is
 	// what pins the embedded recipe data.
 	recipeVersion string
+	// recipeSource identifies the OCI recipe artifact layered over the
+	// embedded catalog, as repository@digest. Empty when the function serves
+	// only embedded data. Surfaced as the summary's recipeSource, because the
+	// module version alone no longer describes what an overlay deploys.
+	recipeSource string
 }
 
 // RunFunction resolves the recipe and emits the desired composed resources.
@@ -188,6 +193,7 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 		overrides:     overrides,
 		pcRef:         pcRef,
 		dp:            f.dp,
+		recipeSource:  f.recipeSource,
 		releaseSchema: releaseSchema,
 		objectSchema:  objectSchema,
 		desired:       desired,
@@ -233,6 +239,7 @@ type stack struct {
 	pcRef     compose.ProviderConfigRef
 
 	dp            recipe.DataProvider // holds the components' manifest files
+	recipeSource  string              // the OCI overlay's repository@digest; empty for embedded-only data
 	releaseSchema *schema.Validator   // nil when no component has a chart
 	objectSchema  *schema.Validator   // nil when no component has manifest files
 
@@ -476,12 +483,16 @@ func (s *stack) summary(criteria *recipe.Criteria, res *recipe.RecipeResult) map
 	for _, name := range deployed {
 		components = append(components, map[string]string{"name": name})
 	}
-	return map[string]any{
+	summary := map[string]any{
 		"recipeName":         recipeName(criteria),
 		"recipeVersion":      res.Metadata.Version,
 		"componentCount":     len(deployed),
 		"deployedComponents": components,
 	}
+	if s.recipeSource != "" {
+		summary["recipeSource"] = s.recipeSource
+	}
+	return summary
 }
 
 // setStatus writes the summary keys to the field path named by the function

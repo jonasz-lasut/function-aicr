@@ -207,6 +207,9 @@ func TestRunFunction(t *testing.T) {
 	type args struct {
 		ctx context.Context
 		req *fnv1.RunFunctionRequest
+		// recipeSource stands in for the repository@digest identity main.go
+		// resolves from the --recipe-oci-* flags; empty means embedded data.
+		recipeSource string
 	}
 	type want struct {
 		rsp    *fnv1.RunFunctionResponse
@@ -301,6 +304,28 @@ func TestRunFunction(t *testing.T) {
 					Conditions:   []*fnv1.Condition{functionSuccess()},
 				},
 				golden: golden{resources: "resolve", composite: "composite/summary.yaml"},
+			},
+		},
+		"SummaryNamesTheOCIRecipeSource": {
+			reason: "When the function serves an OCI recipe source, the summary carries its repository@digest so the composite resource records which catalog overlay produced the deployment.",
+			args: args{
+				ctx:          context.Background(),
+				recipeSource: "ghcr.io/acme/aicr-recipes@sha256:8ac7f6d54e8bcbf074f156a11f2c8c1ca6dcafed85e880e99a3126c0810cd66f",
+				req: &fnv1.RunFunctionRequest{
+					Meta:            meta(),
+					Input:           yamlToProto("input/resolve-with-target.yaml"),
+					Observed:        &fnv1.State{Composite: fixture("observed/xr.yaml")},
+					Desired:         &fnv1.State{Composite: fixture("desired/xr.yaml")},
+					RequiredSchemas: map[string]*fnv1.Schema{"release": permissiveSchema()},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta:         respMeta,
+					Requirements: releaseRequirement(),
+					Conditions:   []*fnv1.Condition{functionSuccess()},
+				},
+				golden: golden{resources: "resolve", composite: "composite/summary-with-recipe-source.yaml"},
 			},
 		},
 		"PreservesSiblingsAtTarget": {
@@ -544,11 +569,11 @@ func TestRunFunction(t *testing.T) {
 		},
 	}
 
-	dp := newDataProvider()
+	dp := embeddedDataProvider()
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			f := &Function{log: logging.NewNopLogger(), ttl: response.DefaultTTL, dp: dp, recipeVersion: testRecipeVersion}
+			f := &Function{log: logging.NewNopLogger(), ttl: response.DefaultTTL, dp: dp, recipeVersion: testRecipeVersion, recipeSource: tc.args.recipeSource}
 			rsp, err := f.RunFunction(tc.args.ctx, tc.args.req)
 
 			if *update {
@@ -576,7 +601,7 @@ func TestRunFunction(t *testing.T) {
 // never drain fails here, not in a cluster.
 func TestCatalogInvariants(t *testing.T) {
 	ctx := context.Background()
-	dp := newDataProvider()
+	dp := embeddedDataProvider()
 
 	leaves, err := recipe.ResolveLeaves(ctx, recipe.ResolveLeavesOptions{Provider: dp, Version: testRecipeVersion})
 	if err != nil {
