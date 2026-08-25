@@ -37,10 +37,10 @@ spec:
             interrupt:
               type: reboot
             resources:
-              cpuLimit: 8000m
-              cpuRequest: 4000m
-              memoryLimit: 16384Mi
-              memoryRequest: 8192Mi
+              cpuLimit: 8
+              cpuRequest: 4
+              memoryLimit: 16Gi
+              memoryRequest: 8Gi
             version: 0.5.0
           nvidia-setup-kernel:
             configMap:
@@ -54,10 +54,10 @@ spec:
               value: "false"
             image: ghcr.io/nvidia/nodewright-packages/nvidia-setup
             resources:
-              cpuLimit: 4000m
-              cpuRequest: 2000m
-              memoryLimit: 8192Mi
-              memoryRequest: 4096Mi
+              cpuLimit: 4
+              cpuRequest: 2
+              memoryLimit: 8Gi
+              memoryRequest: 4Gi
             version: 0.5.0
           nvidia-tuned:
             configMap:
