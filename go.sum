@@ -107,10 +107,10 @@ github.com/coreos/go-semver v0.3.1/go.mod h1:irMmmIw/7yzSRPWryHsK7EYSg09caPQL03V
 github.com/coreos/go-systemd/v22 v22.7.0 h1:LAEzFkke61DFROc7zNLX/WA2i5J8gYqe0rSj9KI28KA=
 github.com/coreos/go-systemd/v22 v22.7.0/go.mod h1:xNUYtjHu2EDXbsxz1i41wouACIwT7Ybq9o0BQhMwD0w=
 github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=
-github.com/crossplane/crossplane-runtime/v2 v2.3.3 h1:seIYf6pk7dLhXd7uSh/N9rVB8IdbCthy3LB6TSn91OI=
-github.com/crossplane/crossplane-runtime/v2 v2.3.3/go.mod h1:UBxoZEXVZz9Ql2W5u5ssFE+egQ21BYqGGc2F3dozUvI=
-github.com/crossplane/crossplane/apis/v2 v2.3.4 h1:qB1YqF300msWEkDQTFUhqfeOq3HtVfSZ1+3wNz1JStA=
-github.com/crossplane/crossplane/apis/v2 v2.3.4/go.mod h1:s0cfMZA+Y/dwQ577PLQn5SBWyUg9k6vKjGAkHEwBShg=
+github.com/crossplane/crossplane-runtime/v2 v2.4.0 h1:m5iGVHbtEh9nZYz7w/wUWDsXVlpG2c8v5i0SZScwHh8=
+github.com/crossplane/crossplane-runtime/v2 v2.4.0/go.mod h1:Pf+hg5A/46QaGjKi7Pk+HdsrFOA/THvST9qM4El8Rzs=
+github.com/crossplane/crossplane/apis/v2 v2.4.0 h1:QmZqZe+vvi9IrnEK8rW7UsCDQBqagK6HFV1mYEw/DkQ=
+github.com/crossplane/crossplane/apis/v2 v2.4.0/go.mod h1:Ev+FjQqTTWJWoaXi63uKER215kDjTo8PghDCT0JapZs=
 github.com/crossplane/function-sdk-go v0.7.1 h1:BEM2b7nAr8rJYc9tjwnoMfVVy1veCA/juD8APYCVLi0=
 github.com/crossplane/function-sdk-go v0.7.1/go.mod h1:AOD9l/tlKYP6giyT8ZVxrcTUCYliRDKO3aRySojsHVY=
 github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467 h1:uX1JmpONuD549D73r6cgnxyUu18Zb7yHAy5AYU0Pm4Q=
