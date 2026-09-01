@@ -1,6 +1,6 @@
 module github.com/jonasz-lasut/function-aicr
 
-go 1.27
+go 1.27.1
 
 require (
 	github.com/NVIDIA/aicr v0.20.0
