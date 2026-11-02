@@ -4,7 +4,7 @@ go 1.27
 
 require (
 	github.com/NVIDIA/aicr v0.20.0
-	github.com/alecthomas/kong v1.16.1
+	github.com/alecthomas/kong v1.17.0
 	github.com/crossplane/crossplane-runtime/v2 v2.4.0
 	github.com/crossplane/crossplane/apis/v2 v2.4.0
 	github.com/crossplane/function-sdk-go v0.7.1
