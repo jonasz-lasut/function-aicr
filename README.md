@@ -331,6 +331,19 @@ A resource that has already been observed is never gated: the gate orders
 creation and must never tear down a live resource because a sibling went
 briefly unready.
 
+### Upgrade warnings
+
+A pass can change the chart version of a `Release` that is already deployed:
+an AICR release moved the recipe's pin, or an override changed. The function
+looks every such move up in AICR's upgrade records, which rate a recorded move
+`safe`, `manual` or `blocked`; a move no record covers is `unknown`. Anything
+but `safe` raises a Warning on the composite resource with AICR's explanation
+and the summary of each record the move crosses.
+
+The upgrade is still applied. The Warning says that AICR documents steps for
+the move, or that nobody assessed it; the records themselves are in AICR's
+catalog under `recipes/components/<component>/upgrades.yaml`.
+
 ### The resolved-recipe summary
 
 When `target.fieldPath` is set, the function writes a summary of the resolved

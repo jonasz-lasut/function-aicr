@@ -62,6 +62,7 @@ Crossplane RunFunctionRequest
 │     stack.composeObjects: rendered → Validate → desired              │
 │ 10. stack.gate (unless skipDeploymentOrder): withhold from desired   │
 │     what is not yet allowed by observed readiness                    │
+│     stack.warnUnsafeUpgrades: version changes AICR rates not safe    │
 │ 11. SetDesiredComposedResources; if target: setStatus(summary)       │
 │ 12. ConditionTrue FunctionSuccess                                    │
 └──────────────────────────────────────────────────────────────────────┘
@@ -211,6 +212,10 @@ Names are pure functions of their inputs because the gate correlates observed ag
 - a manifest-only component (`IsManifestOnlyHelm()`) has no Release: all its Objects wait for its dependencies, and its readiness as a dependency is that of **every Object it emitted** (none emitted → nothing to wait for)
 
 Two invariants: readiness is read from `observed`, never from `desired[...].Ready` (that is set by function-auto-ready later in the pipeline — reading it would deadlock); and `withhold` never removes something already observed (the gate orders creation, it must not tear down a live resource because a sibling flapped). Every withholding emits a `Normal` result naming the blocker.
+
+### Upgrade warnings
+
+`stack.warnUnsafeUpgrades` runs after the gate. `stack.versionChanges` collects the chart-backed components whose observed Release has a `spec.forProvider.chart.version` other than the one `compose.Placement` now gives, and `unsafeUpgrades` runs them through `upgrade.Match` against the records `recipe.LoadUpgradeRecords` reads from the catalog (ADR-021). Every result whose `FailsRun()` is true, which is everything but `safe`, becomes a Warning quoting AICR's `Explanation` and the `Summary` of each crossed record. Nothing is held back: holding a version needs a design for acknowledging the move. `aicr.run/pkg/upgrade` is in AICR's "Internal" tier, so expect signature changes on a bump; `TestUpgradeRecords` fails when the embedded records no longer load or validate.
 
 ### Required schemas
 

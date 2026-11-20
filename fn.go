@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 
 	"aicr.run/pkg/recipe"
+	"aicr.run/pkg/upgrade"
 
 	"github.com/jonasz-lasut/function-aicr/input/v1beta1"
 	"github.com/jonasz-lasut/function-aicr/internal/compose"
@@ -226,6 +228,7 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 	if !in.SkipDeploymentOrder {
 		s.gate(rsp)
 	}
+	s.warnUnsafeUpgrades(ctx, rsp)
 
 	if err := response.SetDesiredComposedResources(rsp, s.desired); err != nil {
 		response.Fatal(rsp, errors.Wrapf(err, "cannot set desired composed resources from %T", req))
@@ -561,6 +564,73 @@ func (s *stack) withhold(names ...string) bool {
 		removed = true
 	}
 	return removed
+}
+
+// warnUnsafeUpgrades warns about every chart version change this pass applies
+// to a deployed Release that AICR's upgrade records do not rate safe. The
+// change is still applied: the warning carries AICR's explanation to where an
+// operator looks, it does not hold the upgrade back.
+func (s *stack) warnUnsafeUpgrades(ctx context.Context, rsp *fnv1.RunFunctionResponse) {
+	from, to := s.versionChanges()
+	if len(from) == 0 {
+		return
+	}
+	set, components, err := recipe.LoadUpgradeRecords(ctx, s.dp)
+	if err == nil {
+		err = set.Validate(components)
+	}
+	if err != nil {
+		response.Warning(rsp, errors.Wrap(err, "cannot assess the component upgrades: AICR's upgrade records cannot be used"))
+		return
+	}
+	for _, msg := range unsafeUpgrades(set, from, to) {
+		response.Warning(rsp, errors.New(msg))
+	}
+}
+
+// versionChanges returns, per chart-backed component, the chart version its
+// observed Release has and the one it is now composed with, for the
+// components where the two differ.
+func (s *stack) versionChanges() (from, to map[string]string) {
+	from, to = make(map[string]string), make(map[string]string)
+	for name, c := range s.managed {
+		if c.IsManifestOnlyHelm() {
+			continue
+		}
+		oc, ok := s.observed[resource.Name(name)]
+		if !ok {
+			continue
+		}
+		observed, err := fieldpath.Pave(oc.Resource.Object).GetString("spec.forProvider.chart.version")
+		if err != nil || observed == "" {
+			continue
+		}
+		if _, desired := compose.Placement(c, s.overrides[name]); desired != "" && desired != observed {
+			from[name], to[name] = observed, desired
+		}
+	}
+	return from, to
+}
+
+// unsafeUpgrades returns one message per version change that AICR's upgrade
+// records do not rate safe, sorted by component: a change recorded as manual
+// or blocked, and one no record assesses. Each quotes AICR's explanation and
+// the summary of every record the change crosses.
+func unsafeUpgrades(set upgrade.Set, from, to map[string]string) []string {
+	var msgs []string
+	for _, r := range upgrade.Match(set, from, to) {
+		if !r.FailsRun() {
+			continue
+		}
+		msg := "upgrading " + strconv.Quote(r.Component) + " from " + from[r.Component] + " to " + to[r.Component] + " is rated " + string(r.Verdict) + " by AICR: " + r.Explanation
+		for _, t := range r.Crossed {
+			if summary := strings.Join(strings.Fields(t.Summary), " "); summary != "" {
+				msg += " " + summary
+			}
+		}
+		msgs = append(msgs, msg)
+	}
+	return msgs
 }
 
 // composes reports whether a managed component composes any resource. A

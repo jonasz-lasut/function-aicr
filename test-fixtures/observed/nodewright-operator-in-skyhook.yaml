@@ -4,10 +4,6 @@ metadata:
   name: nodewright-operator
 spec:
   forProvider:
-    chart:
-      name: nodewright
-      repository: oci://ghcr.io/nvidia/nodewright/charts
-      version: v0.17.1
     namespace: skyhook
 status:
   conditions:

@@ -29,6 +29,7 @@ import (
 	"github.com/crossplane/function-sdk-go/response"
 
 	"aicr.run/pkg/recipe"
+	"aicr.run/pkg/upgrade"
 
 	"github.com/jonasz-lasut/function-aicr/input/v1beta1"
 	"github.com/jonasz-lasut/function-aicr/internal/compose"
@@ -1328,6 +1329,162 @@ func TestKeepNamespaces(t *testing.T) {
 				t.Errorf("%s\nkeepNamespaces(...): -want results, +got results:\n%s", tc.reason, diff)
 			}
 		})
+	}
+}
+
+func TestVersionChanges(t *testing.T) {
+	const operator, scheduler, tuning = "gpu-operator", "kai-scheduler", "nodewright-customizations"
+
+	managed := map[string]*recipe.ComponentRef{
+		operator:  {Name: operator, Type: recipe.ComponentTypeHelm, Version: "v26.7.2", Source: "https://example.com", Chart: operator},
+		scheduler: {Name: scheduler, Type: recipe.ComponentTypeHelm, Version: "v0.16.9", Source: "https://example.com", Chart: scheduler},
+		tuning:    {Name: tuning, Type: recipe.ComponentTypeHelm, ManifestFiles: []string{"tuning.yaml"}},
+	}
+	observedAt := func(versions map[string]string) map[resource.Name]resource.ObservedComposed {
+		observed := make(map[resource.Name]resource.ObservedComposed, len(versions))
+		for name, version := range versions {
+			cd := composed.New()
+			cd.SetName(name)
+			if version != "" {
+				if err := fieldpath.Pave(cd.Object).SetString("spec.forProvider.chart.version", version); err != nil {
+					t.Fatalf("SetString(...): %v", err)
+				}
+			}
+			observed[resource.Name(name)] = resource.ObservedComposed{Resource: cd}
+		}
+		return observed
+	}
+
+	type args struct {
+		overrides map[string]*compose.Override
+		observed  map[resource.Name]resource.ObservedComposed
+	}
+	type want struct {
+		from map[string]string
+		to   map[string]string
+	}
+
+	cases := map[string]struct {
+		reason string
+		args   args
+		want   want
+	}{
+		"NothingObserved": {
+			reason: "A first install is not an upgrade.",
+			args:   args{},
+			want:   want{from: map[string]string{}, to: map[string]string{}},
+		},
+		"SameVersion": {
+			reason: "A Release already at the version it is composed with does not change; one observed without a version, and a manifest-only component, have nothing to compare.",
+			args:   args{observed: observedAt(map[string]string{operator: "v26.7.2", scheduler: "", tuning: "1.0.0"})},
+			want:   want{from: map[string]string{}, to: map[string]string{}},
+		},
+		"RecipeMovesTheVersion": {
+			reason: "A Release observed at another version than the recipe now pins is a version change.",
+			args:   args{observed: observedAt(map[string]string{operator: "v26.3.3", scheduler: "v0.16.9"})},
+			want:   want{from: map[string]string{operator: "v26.3.3"}, to: map[string]string{operator: "v26.7.2"}},
+		},
+		"OverrideMovesTheVersion": {
+			reason: "The version a component is composed with includes its override, so an override that changes a deployed version is assessed too.",
+			args: args{
+				overrides: map[string]*compose.Override{scheduler: {Version: "v0.17.1"}},
+				observed:  observedAt(map[string]string{operator: "v26.7.2", scheduler: "v0.16.9"}),
+			},
+			want: want{from: map[string]string{scheduler: "v0.16.9"}, to: map[string]string{scheduler: "v0.17.1"}},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			s := &stack{managed: managed, overrides: tc.args.overrides, observed: tc.args.observed}
+
+			from, to := s.versionChanges()
+
+			if diff := cmp.Diff(tc.want.from, from); diff != "" {
+				t.Errorf("%s\nversionChanges(): -want from, +got from:\n%s", tc.reason, diff)
+			}
+			if diff := cmp.Diff(tc.want.to, to); diff != "" {
+				t.Errorf("%s\nversionChanges(): -want to, +got to:\n%s", tc.reason, diff)
+			}
+		})
+	}
+}
+
+func TestUnsafeUpgrades(t *testing.T) {
+	// Hand-written records: the wording of AICR's own changes with every
+	// catalog bump, the rules for reading them do not.
+	set := upgrade.Set{
+		"operator": {Component: "operator", Transitions: []upgrade.Transition{
+			{From: "<2.0.0", To: ">=2.0.0 <3.0.0", Verdict: upgrade.VerdictManual, Summary: "2.0.0 renames the\n  Widget CRD."},
+			{From: ">=2.0.0 <3.0.0", To: ">=3.0.0 <4.0.0", Verdict: upgrade.VerdictSafe, Summary: "3.0.0 only adds fields."},
+		}},
+	}
+
+	// AICR words the explanation; the message quotes it rather than a copy
+	// of it, so a bump that rewords it does not fail here.
+	explanation := func(from, to map[string]string) string {
+		return upgrade.Match(set, from, to)[0].Explanation
+	}
+	manualFrom, manualTo := map[string]string{"operator": "1.5.0"}, map[string]string{"operator": "2.0.0"}
+	unknownFrom, unknownTo := map[string]string{"scheduler": "0.14.1"}, map[string]string{"scheduler": "0.16.9"}
+
+	type args struct {
+		from map[string]string
+		to   map[string]string
+	}
+	type want struct {
+		msgs []string
+	}
+
+	cases := map[string]struct {
+		reason string
+		args   args
+		want   want
+	}{
+		"SafeUpgrade": {
+			reason: "A change a record rates safe raises nothing.",
+			args:   args{from: map[string]string{"operator": "2.1.0"}, to: map[string]string{"operator": "3.0.0"}},
+			want:   want{},
+		},
+		"ManualUpgrade": {
+			reason: "A change a record rates manual is reported with AICR's explanation and the record's summary, its whitespace collapsed.",
+			args:   args{from: manualFrom, to: manualTo},
+			want: want{msgs: []string{
+				`upgrading "operator" from 1.5.0 to 2.0.0 is rated manual by AICR: ` + explanation(manualFrom, manualTo) + ` 2.0.0 renames the Widget CRD.`,
+			}},
+		},
+		"UnassessedUpgrade": {
+			reason: "A change no record covers is not a pass: nobody assessed it, so it is reported as unknown.",
+			args:   args{from: unknownFrom, to: unknownTo},
+			want: want{msgs: []string{
+				`upgrading "scheduler" from 0.14.1 to 0.16.9 is rated unknown by AICR: ` + explanation(unknownFrom, unknownTo),
+			}},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := unsafeUpgrades(set, tc.args.from, tc.args.to)
+			if diff := cmp.Diff(tc.want.msgs, got); diff != "" {
+				t.Errorf("%s\nunsafeUpgrades(...): -want, +got:\n%s", tc.reason, diff)
+			}
+		})
+	}
+}
+
+// TestUpgradeRecords guards the one part of the upgrade warnings that reads
+// the catalog: an AICR bump whose upgrade records no longer load or validate
+// would turn every assessment into a "cannot assess" warning.
+func TestUpgradeRecords(t *testing.T) {
+	set, components, err := recipe.LoadUpgradeRecords(context.Background(), embeddedDataProvider())
+	if err != nil {
+		t.Fatalf("recipe.LoadUpgradeRecords(...): %v", err)
+	}
+	if err := set.Validate(components); err != nil {
+		t.Errorf("Set.Validate(...): %v", err)
+	}
+	if len(set) == 0 {
+		t.Error("the embedded catalog has no upgrade records; the upgrade warnings would rate every change unknown")
 	}
 }
 
