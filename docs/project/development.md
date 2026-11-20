@@ -75,7 +75,7 @@ patch.
    has a hand copy of both. `TestNodeSchedulingAcrossTheCatalog` and
    `TestDRAEvictionConstants` catch a registry entry or a constant the copy
    doesn't cover, but not a change in behaviour.
-6. Label the pull request `e2e:kwok`. The end-to-end suite then deploys a
+6. Label the pull request `e2e`. The end-to-end suite then also deploys a
    stock recipe of the new catalog onto simulated nodes.
 7. Fix behaviour changes by hand. A component the catalog adds joins every
    `TestRunFunction` fixture that doesn't skip it.

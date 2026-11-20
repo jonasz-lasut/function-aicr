@@ -13,6 +13,14 @@
   // without updates. Nothing in this repository is vendored or generated
   // from another package manager, so nothing needs ignoring.
   ignorePaths: [],
+  // Every profile of the end-to-end suite runs on Renovate's pull requests:
+  // the E2E workflow starts them on the `e2e` label.
+  labels: ['e2e'],
+  // GitHub's own auto-merge merges as soon as the required checks pass. The
+  // end-to-end suite is not one of them and takes longer, so an update would
+  // be merged before the suite had run. Renovate merges instead, once every
+  // check on the branch is green.
+  platformAutomerge: false,
   // The dependency surfaces: go.mod, the workflows (actions and the CLI
   // versions in their env), the Function package refs under example/, and
   // the Dockerfile. go.mod is the single source of truth for the Go version
@@ -148,9 +156,8 @@
     },
 
     // The end-to-end suite: the cluster's pins in the Makefile, the suite's
-    // own Go module and the build submodule. The suite runs on every pull
-    // request but is not a required check, so GitHub's auto-merge would not
-    // wait for it: merge these once the suite is green.
+    // own Go module and the build submodule. A change to the suite itself
+    // is merged by hand, once the suite is green.
     {
       matchFileNames: ['Makefile', 'test/e2e/**'],
       groupName: 'e2e',

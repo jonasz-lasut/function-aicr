@@ -89,12 +89,13 @@ The suite follows the one in `crossplane/crossplane`. Features are built with
 manifests in a directory under `test/e2e/manifests/`. It's a Go module of its
 own, so `go test ./...` at the root doesn't build it.
 
-CI runs it on every pull request.
-
 A second profile deploys a stock recipe with its real charts onto nodes that
-KWOK simulates, the way AICR's own KWOK lane does. It pulls every chart from
-its upstream registry, so CI runs it on request: on a pull request with the
-`e2e:kwok` label, or from the Actions tab.
+KWOK simulates, the way AICR's own KWOK lane does.
+
+CI runs the suite on request only. On a pull request that's by label: `e2e`
+runs both profiles, and `e2e:catalog` and `e2e:kwok` run one. Renovate
+labels its pull requests `e2e`. The suite can also be started from the
+Actions tab.
 
 ```shell
 make e2e.up E2E_PROFILE=kwok

@@ -17,21 +17,24 @@
 # profiles, each on a cluster of its own.
 #
 # catalog deploys the suite's own small catalog from a registry in the
-# cluster. Beyond the packages and the registry's image it pulls nothing, and
-# it runs on every pull request and on main.
+# cluster. Beyond the packages and the registry's image it pulls nothing.
 #
 # kwok deploys a stock recipe, with its real charts, onto nodes that KWOK
-# simulates. It pulls every chart of the recipe from its upstream registry, so
-# it runs on request: on a pull request that has the `e2e:kwok` label, or from
-# the Actions tab.
+# simulates. It pulls every chart of the recipe from its upstream registry.
+#
+# The suite runs on request only. On a pull request that is by label:
+#
+#   e2e          every profile
+#   e2e:catalog  the catalog profile
+#   e2e:kwok     the kwok profile
+#
+# Renovate labels its pull requests `e2e`. A manual run from the Actions tab
+# runs the catalog profile, and the kwok profile with it on request.
 name: E2E
 
 on:
   pull_request:
     types: [opened, reopened, synchronize, labeled]
-  push:
-    branches:
-      - main
   workflow_dispatch:
     inputs:
       kwok:
@@ -43,9 +46,10 @@ permissions:
   contents: read
 
 jobs:
-  # The profiles this event runs. Any label fires `labeled`: one that is not
-  # e2e:kwok selects nothing, and e2e:kwok selects kwok alone, so adding a
-  # label never repeats the catalog run the commit already has.
+  # The profiles this event runs. A new commit runs the profiles the pull
+  # request's labels select. Adding a label runs what that label selects and
+  # nothing else, so a label that is not one of the suite's starts nothing and
+  # `e2e:kwok` does not repeat a catalog run the commit already has.
   profiles:
     runs-on: ubuntu-26.04
     timeout-minutes: 5
@@ -57,21 +61,28 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           ACTION: ${{ github.event.action }}
-          LABEL: ${{ github.event.label.name }}
-          LABELLED_KWOK: ${{ contains(github.event.pull_request.labels.*.name, 'e2e:kwok') }}
+          ADDED_LABEL: ${{ github.event.label.name }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           DISPATCHED_KWOK: ${{ inputs.kwok }}
         run: |
-          profiles=()
-          if [[ "$EVENT" != pull_request ]]; then
-            profiles+=(catalog)
-            if [[ "$DISPATCHED_KWOK" == true ]]; then profiles+=(kwok); fi
-          else
-            if [[ "$ACTION" != labeled ]]; then profiles+=(catalog); fi
-            if [[ "$LABELLED_KWOK" == true && ( "$ACTION" != labeled || "$LABEL" == "e2e:kwok" ) ]]; then
-              profiles+=(kwok)
+          profiles_of() {
+            case "$1" in
+              e2e) echo catalog; echo kwok ;;
+              e2e:catalog) echo catalog ;;
+              e2e:kwok) echo kwok ;;
+            esac
+          }
+          selected=$(
+            if [[ "$EVENT" != pull_request ]]; then
+              echo catalog
+              if [[ "$DISPATCHED_KWOK" == true ]]; then echo kwok; fi
+            elif [[ "$ACTION" == labeled ]]; then
+              profiles_of "$ADDED_LABEL"
+            else
+              jq -r '.[]' <<<"$LABELS" | while read -r label; do profiles_of "$label"; done
             fi
-          fi
-          echo "profiles=$(jq -cn '$ARGS.positional' --args "${profiles[@]}")" >> "$GITHUB_OUTPUT"
+          )
+          echo "profiles=$(awk 'NF && !seen[$0]++' <<<"$selected" | jq -Rnc '[inputs]')" >> "$GITHUB_OUTPUT"
 
   e2e:
     name: e2e (${{ matrix.profile }})
