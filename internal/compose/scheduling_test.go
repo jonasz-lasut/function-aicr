@@ -185,7 +185,7 @@ func TestRequireNodeSelectors(t *testing.T) {
 		optedOut map[string]bool
 	}
 	type want struct {
-		err error
+		err string
 	}
 
 	cases := map[string]struct {
@@ -213,7 +213,7 @@ func TestRequireNodeSelectors(t *testing.T) {
 				values: map[string]any{"nodesets": map[string]any{"gpu": map[string]any{"nodeSelector": selector}}},
 				comp:   required,
 			},
-			want: want{err: cmpopts.AnyError},
+			want: want{err: `component "component" requires nodeScheduling.system.nodeSelector: its values have no node selector at controller.nodeSelector`},
 		},
 		"EmptyAcceleratedSelector": {
 			reason: "An empty selector, as an override can leave behind, is no selector.",
@@ -224,7 +224,7 @@ func TestRequireNodeSelectors(t *testing.T) {
 				},
 				comp: required,
 			},
-			want: want{err: cmpopts.AnyError},
+			want: want{err: `component "component" requires nodeScheduling.accelerated.nodeSelector: its values have no node selector at nodesets.gpu.nodeSelector`},
 		},
 		"OptedOutByTheRecipe": {
 			reason: "A path the recipe opts out is the recipe author's decision to deploy without a selector there.",
@@ -242,9 +242,12 @@ func TestRequireNodeSelectors(t *testing.T) {
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			err := RequireNodeSelectors("component", tc.args.values, tc.args.comp, tc.args.optedOut)
+			got := ""
+			if err := RequireNodeSelectors("component", tc.args.values, tc.args.comp, tc.args.optedOut); err != nil {
+				got = err.Error()
+			}
 
-			if diff := cmp.Diff(tc.want.err, err, cmpopts.EquateErrors()); diff != "" {
+			if diff := cmp.Diff(tc.want.err, got); diff != "" {
 				t.Errorf("%s\nRequireNodeSelectors(...): -want err, +got err:\n%s", tc.reason, diff)
 			}
 		})

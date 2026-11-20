@@ -715,6 +715,23 @@ func TestRunFunction(t *testing.T) {
 				},
 			},
 		},
+		"FatalWhenAComponentRequiresANodeSelector": {
+			reason: "AICR's registry requires a node selector for slinky-slurm, whose StatefulSets are tied to the zone of their volumes; like AICR's bundler, the function refuses to deploy it without one and names the Input field that sets it.",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:     meta(),
+					Input:    yamlToProto("input/requires-node-selector.yaml"),
+					Observed: &fnv1.State{Composite: fixture("observed/xr.yaml")},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta:    respMeta,
+					Results: fatal(`component "slinky-slurm" requires nodeScheduling.system.nodeSelector: its values have no node selector at controller.podSpec.nodeSelector, restapi.podSpec.nodeSelector, loginsets.slinky.podSpec.nodeSelector, accounting.podSpec.nodeSelector`),
+				},
+			},
+		},
 		"FatalWhenComponentClassUnknown": {
 			reason: "A misspelled class would filter out every component and report a recipe that deploys nothing as a success.",
 			args: args{
@@ -1020,11 +1037,6 @@ func TestCatalogInvariants(t *testing.T) {
 	}
 }
 
-// TestDRAEvictionAcrossTheCatalog wires the DRA eviction contract into every
-// leaf recipe that has its three components. The wiring copies value paths
-// AICR's bundler keeps private, so an AICR bump can move them without a
-// compile error: here a leaf whose values no longer take the wiring, or whose
-// dra-node-labeler still renders nothing once enabled, fails by name.
 // TestNodeSchedulingAcrossTheCatalog guards what compose.ApplyNodeScheduling
 // and compose.RequireNodeSelectors assume of the catalog, on every leaf.
 func TestNodeSchedulingAcrossTheCatalog(t *testing.T) {
@@ -1037,6 +1049,15 @@ func TestNodeSchedulingAcrossTheCatalog(t *testing.T) {
 	leaves, err := recipe.ResolveLeaves(ctx, recipe.ResolveLeavesOptions{Provider: dp, Version: testRecipeVersion})
 	if err != nil {
 		t.Fatalf("recipe.ResolveLeaves(...): %v", err)
+	}
+
+	// Every entry of the registry, not only the components of a leaf: a mixin
+	// can bring in one that no leaf has.
+	for i := range registry.Components {
+		comp := &registry.Components[i]
+		if comp.RequireSystemNodeSelectorIfStorageClassSet() || comp.RequireAcceleratedNodeSelectorIfStorageClassSet() {
+			t.Errorf("%q requires a node selector once a storage class is set, a condition compose.RequireNodeSelectors does not have: port componentHasConfiguredStorageClass from aicr.run/pkg/bundler/bundler.go", comp.Name)
+		}
 	}
 
 	placed := compose.NodeScheduling{
@@ -1061,16 +1082,6 @@ func TestNodeSchedulingAcrossTheCatalog(t *testing.T) {
 			if err != nil {
 				t.Fatalf("resolveValues(...): %v", err)
 			}
-			for name := range managed {
-				comp := registry.Get(name)
-				if comp == nil {
-					continue
-				}
-				if comp.RequireSystemNodeSelectorIfStorageClassSet() || comp.RequireAcceleratedNodeSelectorIfStorageClassSet() {
-					t.Errorf("%q requires a node selector once a storage class is set, a condition compose.RequireNodeSelectors does not have: port componentHasConfiguredStorageClass from aicr.run/pkg/bundler/bundler.go", name)
-				}
-			}
-
 			s := &stack{managed: managed, values: values, dp: dp}
 			optedOut := s.applyNodeScheduling(placed, registry)
 			if err := s.requireNodeSelectors(registry, optedOut); err != nil {
@@ -1083,6 +1094,80 @@ func TestNodeSchedulingAcrossTheCatalog(t *testing.T) {
 	}
 }
 
+// TestRequireNodeSelectorsReadsTheOverride checks the values the requirement
+// is tested against: the ones a component deploys with, its override merged
+// in. It uses slinky-slurm's entry in the embedded registry, which requires a
+// selector for both kinds of workload.
+func TestRequireNodeSelectorsReadsTheOverride(t *testing.T) {
+	const name = "slinky-slurm"
+
+	registry, err := recipe.GetComponentRegistryFor(embeddedDataProvider())
+	if err != nil {
+		t.Fatalf("recipe.GetComponentRegistryFor(...): %v", err)
+	}
+	comp := registry.Get(name)
+	if comp == nil || !comp.RequireSystemNodeSelector() || !comp.RequireAcceleratedNodeSelector() {
+		t.Fatalf("the embedded registry no longer requires both node selectors for %q: pick another component for this test", name)
+	}
+
+	// An override that sets a selector at every path the registry requires.
+	selectors := make(map[string]any)
+	for _, path := range slices.Concat(comp.GetSystemNodeSelectorPaths(), comp.GetAcceleratedNodeSelectorPaths()) {
+		if err := fieldpath.Pave(selectors).SetValue(path, map[string]any{"topology.kubernetes.io/zone": "us-east-1a"}); err != nil {
+			t.Fatalf("SetValue(%q): %v", path, err)
+		}
+	}
+
+	type args struct {
+		overrides map[string]*compose.Override
+	}
+	type want struct {
+		err error
+	}
+
+	cases := map[string]struct {
+		reason string
+		args   args
+		want   want
+	}{
+		"NoSelector": {
+			reason: "Without nodeScheduling and without an override the component has no selector, and is refused.",
+			want:   want{err: cmpopts.AnyError},
+		},
+		"SelectorFromTheOverride": {
+			reason: "An override places one component on its own, so a selector it sets satisfies the requirement.",
+			args:   args{overrides: map[string]*compose.Override{name: {Values: selectors}}},
+		},
+		"OverrideWithoutSelector": {
+			reason: "An override of other values supplies no selector.",
+			args:   args{overrides: map[string]*compose.Override{name: {Values: map[string]any{"replicas": 1}}}},
+			want:   want{err: cmpopts.AnyError},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			s := &stack{
+				managed:   map[string]*recipe.ComponentRef{"slinky-slurm": {Name: "slinky-slurm", Type: recipe.ComponentTypeHelm}},
+				values:    map[string]map[string]any{"slinky-slurm": {}},
+				overrides: tc.args.overrides,
+			}
+			optedOut := s.applyNodeScheduling(compose.NodeScheduling{}, registry)
+
+			err := s.requireNodeSelectors(registry, optedOut)
+
+			if diff := cmp.Diff(tc.want.err, err, cmpopts.EquateErrors()); diff != "" {
+				t.Errorf("%s\nrequireNodeSelectors(...): -want err, +got err:\n%s", tc.reason, diff)
+			}
+		})
+	}
+}
+
+// TestDRAEvictionAcrossTheCatalog wires the DRA eviction contract into every
+// leaf recipe that has its three components. The wiring copies value paths
+// AICR's bundler keeps private, so an AICR bump can move them without a
+// compile error: here a leaf whose values no longer take the wiring, or whose
+// dra-node-labeler still renders nothing once enabled, fails by name.
 func TestDRAEvictionAcrossTheCatalog(t *testing.T) {
 	ctx := context.Background()
 	dp := embeddedDataProvider()
@@ -1409,9 +1494,6 @@ func TestGate(t *testing.T) {
 	}
 }
 
-// TestManagedComponents exercises managedComponents directly: the embedded
-// "kind" recipe used by TestRunFunction has no disabled or non-Helm component,
-// and its skip lists name only real components.
 func TestNamespaceObject(t *testing.T) {
 	const namespace = "gpu-operator"
 	chart := &recipe.ComponentRef{Name: "gpu-operator", Type: recipe.ComponentTypeHelm, Namespace: namespace, Source: "https://helm.ngc.nvidia.com/nvidia", Chart: "gpu-operator"}
@@ -1457,6 +1539,14 @@ func TestNamespaceObject(t *testing.T) {
 				component: chart,
 				pre:       []string{"gpu-operator-pre-namespace-gpu-operator"},
 				rendered:  []string{"gpu-operator-pre-namespace-gpu-operator"},
+			},
+		},
+		"DeclaredByTheRecipeAfterTheChart": {
+			reason: "A manifest-only component's manifest files are its post wave, so a namespace declared there is the recipe's own too.",
+			args: args{
+				component: manifestOnly,
+				post:      []string{"dra-node-labeler-post-namespace-gpu-operator", "dra-node-labeler-post-daemonset-labeler"},
+				rendered:  []string{"dra-node-labeler-post-namespace-gpu-operator"},
 			},
 		},
 		"OverriddenNamespace": {
@@ -1750,6 +1840,9 @@ func TestUpgradeRecords(t *testing.T) {
 	}
 }
 
+// TestManagedComponents exercises managedComponents directly: the embedded
+// "kind" recipe used by TestRunFunction has no disabled or non-Helm component,
+// and its skip lists name only real components.
 func TestManagedComponents(t *testing.T) {
 	warning := func(format string, a ...any) *fnv1.Result {
 		return &fnv1.Result{
