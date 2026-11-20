@@ -1,0 +1,27 @@
+# Both placements select a node by a label with an empty value, as the
+# node-role labels have, which no node has until the feature sets it.
+apiVersion: e2e.aicr.example.org/v1alpha1
+kind: Stack
+metadata:
+  name: scheduling
+  namespace: default
+spec:
+  aicr:
+    criteria:
+      service: kind
+    nodeScheduling:
+      system:
+        nodeSelector:
+          e2e.aicr.example.org/system-pool: ""
+        tolerations:
+        - key: e2e.aicr.example.org/dedicated
+          operator: Equal
+          value: system
+          effect: NoSchedule
+      accelerated:
+        nodeSelector:
+          e2e.aicr.example.org/accelerated-pool: ""
+        tolerations:
+        - key: e2e.aicr.example.org/accelerator
+          operator: Exists
+          effect: NoSchedule

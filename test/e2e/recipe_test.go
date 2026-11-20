@@ -193,6 +193,48 @@ func TestKeptNamespace(t *testing.T) {
 	)
 }
 
+// TestNodeScheduling places the two charts of the suite's catalog, whose
+// registry entries list the chart's node selector and tolerations for system
+// workloads (e2e-first) and for workloads on accelerated nodes (e2e-second).
+func TestNodeScheduling(t *testing.T) {
+	const (
+		xr               = "scheduling/xr.yaml"
+		systemLabel      = "e2e.aicr.example.org/system-pool"
+		acceleratedLabel = "e2e.aicr.example.org/accelerated-pool"
+	)
+
+	environment.Test(t,
+		features.NewWithDescription(t.Name(), "Tests that nodeScheduling reaches the pods: each chart gets the node selector and the tolerations of the kind of workload AICR's registry lists its values for, and runs once a node matches.").
+			WithLabel(LabelArea, LabelAreaRecipe).
+			WithLabel(LabelSize, LabelSizeLarge).
+			WithLabel(config.LabelTestSuite, config.TestSuiteDefault).
+			WithSetup("CreatePrerequisites", createPrerequisites()).
+			WithSetup("NoNodeMatchesTheSelectors", funcs.AllOf(UnlabelNodes(systemLabel), UnlabelNodes(acceleratedLabel))).
+			Assess("CreateXR", createXR(xr)).
+			Assess("SystemWorkloadIsPlaced", funcs.AllOf(
+				funcs.ResourceCreatedWithin(2*time.Minute, deployment(componentFirst, componentFirst)),
+				funcs.ResourceHasFieldValueWithin(30*time.Second, deployment(componentFirst, componentFirst), "spec.template.spec.nodeSelector", map[string]any{systemLabel: ""}),
+				funcs.ResourceHasFieldValueWithin(30*time.Second, deployment(componentFirst, componentFirst), "spec.template.spec.tolerations[0].key", "e2e.aicr.example.org/dedicated"),
+				funcs.ResourceHasFieldValueWithin(30*time.Second, deployment(componentFirst, componentFirst), "spec.template.spec.tolerations[0].value", "system"),
+			)).
+			Assess("NodesJoinThePools", funcs.AllOf(
+				LabelNodes(systemLabel, ""),
+				LabelNodes(acceleratedLabel, ""),
+			)).
+			Assess("AcceleratedWorkloadIsPlaced", funcs.AllOf(
+				funcs.ResourcesHaveConditionWithin(3*time.Minute, recipeManifests, xr, xpv2.Available(), xpv2.ReconcileSuccess()),
+				funcs.ResourceHasFieldValueWithin(30*time.Second, deployment(componentSecond, componentSecond), "spec.template.spec.nodeSelector", map[string]any{acceleratedLabel: ""}),
+				funcs.ResourceHasFieldValueWithin(30*time.Second, deployment(componentSecond, componentSecond), "spec.template.spec.tolerations[0].key", "e2e.aicr.example.org/accelerator"),
+				funcs.DeploymentBecomesAvailableWithin(1*time.Minute, componentFirst, componentFirst),
+				funcs.DeploymentBecomesAvailableWithin(1*time.Minute, componentSecond, componentSecond),
+			)).
+			WithTeardown("DeleteXR", deleteXR(xr)).
+			WithTeardown("UnlabelNodes", funcs.AllOf(UnlabelNodes(systemLabel), UnlabelNodes(acceleratedLabel))).
+			WithTeardown("DeletePrerequisites", deletePrerequisites()).
+			Feature(),
+	)
+}
+
 // createPrerequisites applies the XRD and the Composition the recipe features
 // share.
 func createPrerequisites() features.Func {
