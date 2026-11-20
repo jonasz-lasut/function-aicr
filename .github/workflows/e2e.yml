@@ -13,15 +13,17 @@
 # limitations under the License.
 
 # The end-to-end suite (test/e2e, the Makefile): a kind cluster with
-# Crossplane, the providers, a registry and function-aicr built from the
-# pull request's tree. It is slower than the unit tests and pulls packages
-# and images, so it runs on demand: from the Actions tab, or on a pull
-# request that has the `e2e` label.
+# Crossplane, the providers, a registry that holds the suite's own charts and
+# recipe catalog, and function-aicr built from the tree. It deploys nothing
+# from outside the cluster, so it takes a few minutes and runs on every pull
+# request and on main.
 name: E2E
 
 on:
-  pull_request:
-    types: [labeled, synchronize, opened, reopened]
+  pull_request: {}
+  push:
+    branches:
+      - main
   workflow_dispatch: {}
 
 permissions:
@@ -29,11 +31,10 @@ permissions:
 
 concurrency:
   group: e2e-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   e2e:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'e2e')
     runs-on: ubuntu-26.04
     timeout-minutes: 45
     steps:

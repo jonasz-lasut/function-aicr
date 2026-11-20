@@ -143,9 +143,9 @@
     },
 
     // The end-to-end suite: the cluster's pins in the Makefile, the suite's
-    // own Go module and the build submodule. The suite runs on demand, not on
-    // every pull request, so nothing here merges on its own: label the PR
-    // `e2e` and merge it once the suite is green.
+    // own Go module and the build submodule. The suite runs on every pull
+    // request but is not a required check, so GitHub's auto-merge would not
+    // wait for it: merge these once the suite is green.
     {
       matchFileNames: ['Makefile', 'test/e2e/**'],
       groupName: 'e2e',
