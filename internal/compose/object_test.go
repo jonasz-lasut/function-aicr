@@ -156,3 +156,68 @@ func TestNewObject(t *testing.T) {
 		})
 	}
 }
+
+func TestNewNamespaceObject(t *testing.T) {
+	type args struct {
+		component string
+		wave      string
+		namespace string
+		pcRef     ProviderConfigRef
+	}
+	type want struct {
+		name string
+		obj  map[string]any
+	}
+
+	cases := map[string]struct {
+		reason string
+		args   args
+		want   want
+	}{
+		"CreatesWithoutOwning": {
+			reason: "The namespace is created when missing and never updated or deleted, and the Object has the name a Namespace document of the component's own would get.",
+			args: args{
+				component: "gpu-operator",
+				wave:      "pre",
+				namespace: "gpu-operator",
+				pcRef:     ProviderConfigRef{Kind: "ClusterProviderConfig", Name: "gpu-cluster"},
+			},
+			want: want{
+				name: "gpu-operator-pre-namespace-gpu-operator",
+				obj: map[string]any{
+					"apiVersion": "kubernetes.m.crossplane.io/v1alpha1",
+					"kind":       "Object",
+					"metadata":   map[string]any{"name": "gpu-operator-pre-namespace-gpu-operator"},
+					"spec": map[string]any{
+						"forProvider": map[string]any{
+							"manifest": map[string]any{
+								"apiVersion": "v1",
+								"kind":       "Namespace",
+								"metadata":   map[string]any{"name": "gpu-operator"},
+							},
+						},
+						"managementPolicies": []any{"Observe", "Create"},
+						"providerConfigRef": map[string]any{
+							"kind": "ClusterProviderConfig",
+							"name": "gpu-cluster",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			gotName := NamespaceObjectName(tc.args.component, tc.args.wave, tc.args.namespace)
+			got := NewNamespaceObject(tc.args.namespace, gotName, tc.args.pcRef)
+
+			if diff := cmp.Diff(tc.want.name, gotName); diff != "" {
+				t.Errorf("%s\nNamespaceObjectName(...): -want, +got:\n%s", tc.reason, diff)
+			}
+			if diff := cmp.Diff(tc.want.obj, got); diff != "" {
+				t.Errorf("%s\nNewNamespaceObject(...): -want, +got:\n%s", tc.reason, diff)
+			}
+		})
+	}
+}

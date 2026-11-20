@@ -462,6 +462,9 @@ func (s *stack) renderObjects(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		if ns := s.namespaceObject(c, pre, post); ns != "" {
+			pre = append([]string{ns}, pre...)
+		}
 		if len(pre) > 0 {
 			s.objects.pre[name] = pre
 		}
@@ -470,6 +473,33 @@ func (s *stack) renderObjects(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// namespaceObject renders the Object that makes the namespace of a component
+// exist ahead of its manifests, and returns its name, or "" when the component
+// needs none. AICR's bundler installs a component's manifest files as a chart
+// of their own with --create-namespace. Without the same here an Object for a
+// pre-manifest file could never be created, in a namespace that only the
+// component's Release creates, and that Release waits for the Object. The
+// namespace is needed ahead of pre-manifest files, and by a manifest-only
+// component, which has no Release to create it. A recipe that declares the
+// namespace in the component's manifest files keeps its own.
+func (s *stack) namespaceObject(c *recipe.ComponentRef, pre, post []string) string {
+	if len(pre) == 0 && (!c.IsManifestOnlyHelm() || len(post) == 0) {
+		return ""
+	}
+	namespace, _ := compose.Placement(c, s.overrides[c.Name])
+	if namespace == "" {
+		return ""
+	}
+	name := compose.NamespaceObjectName(c.Name, "pre", namespace)
+	for _, declared := range []string{name, compose.NamespaceObjectName(c.Name, "post", namespace)} {
+		if _, ok := s.rendered[declared]; ok {
+			return ""
+		}
+	}
+	s.rendered[name] = compose.NewNamespaceObject(namespace, name, s.pcRef)
+	return name
 }
 
 // renderWave renders the Objects of one wave — pre or post — of a component's

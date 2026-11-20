@@ -19,6 +19,14 @@ namespace, chart, version and values, and wraps each document in a
 exactly as the `Release` does. A file that fails to render or parse
 is Fatal, which keeps a recipe from being deployed with a piece missing.
 
+The namespace has to exist before an `Object` can be created in it, and for
+a pre-manifest file that's before the chart that would create it. A
+component with pre-manifest files, and a manifest-only component, gets one
+more `Object` for that reason, named `<component>-pre-namespace-<namespace>`. It
+creates the component's namespace when it's missing and never changes or
+deletes it, as Helm's `--create-namespace` does. A recipe that declares the
+namespace in the component's own manifest files keeps its own.
+
 ## Which components are deployed
 
 The function deploys the recipe's Helm components that AICR enables. A

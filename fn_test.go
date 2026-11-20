@@ -1333,6 +1333,83 @@ func TestGate(t *testing.T) {
 // TestManagedComponents exercises managedComponents directly: the embedded
 // "kind" recipe used by TestRunFunction has no disabled or non-Helm component,
 // and its skip lists name only real components.
+func TestNamespaceObject(t *testing.T) {
+	const namespace = "gpu-operator"
+	chart := &recipe.ComponentRef{Name: "gpu-operator", Type: recipe.ComponentTypeHelm, Namespace: namespace, Source: "https://helm.ngc.nvidia.com/nvidia", Chart: "gpu-operator"}
+	manifestOnly := &recipe.ComponentRef{Name: "dra-node-labeler", Type: recipe.ComponentTypeHelm, Namespace: namespace, ManifestFiles: []string{"labeler.yaml"}}
+
+	type args struct {
+		component *recipe.ComponentRef
+		pre       []string
+		post      []string
+		overrides map[string]*compose.Override
+		rendered  []string
+	}
+	type want struct {
+		name string
+	}
+
+	cases := map[string]struct {
+		reason string
+		args   args
+		want   want
+	}{
+		"PreManifests": {
+			reason: "An Object for a pre-manifest file is created before the component's Release, which would otherwise be what creates the namespace.",
+			args:   args{component: chart, pre: []string{"gpu-operator-pre-configmap-kernel-module-params"}},
+			want:   want{name: "gpu-operator-pre-namespace-gpu-operator"},
+		},
+		"PostManifestsOfAChart": {
+			reason: "Post-manifest Objects follow the Release, which has created the namespace by then.",
+			args:   args{component: chart, post: []string{"gpu-operator-post-clusterpolicy-default"}},
+		},
+		"ManifestOnly": {
+			reason: "A manifest-only component has no Release to create its namespace.",
+			args:   args{component: manifestOnly, post: []string{"dra-node-labeler-post-daemonset-labeler"}},
+			want:   want{name: "dra-node-labeler-pre-namespace-gpu-operator"},
+		},
+		"NothingRendered": {
+			reason: "A component whose manifest files render no document composes nothing, so it needs no namespace either.",
+			args:   args{component: manifestOnly},
+		},
+		"DeclaredByTheRecipe": {
+			reason: "A recipe that declares the namespace in the component's manifest files, as for Talos, keeps its own.",
+			args: args{
+				component: chart,
+				pre:       []string{"gpu-operator-pre-namespace-gpu-operator"},
+				rendered:  []string{"gpu-operator-pre-namespace-gpu-operator"},
+			},
+		},
+		"OverriddenNamespace": {
+			reason: "The namespace is the one the component deploys to, an override or a kept namespace included.",
+			args: args{
+				component: chart,
+				pre:       []string{"gpu-operator-pre-configmap-kernel-module-params"},
+				overrides: map[string]*compose.Override{"gpu-operator": {Namespace: "nvidia"}},
+			},
+			want: want{name: "gpu-operator-pre-namespace-nvidia"},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			s := &stack{overrides: tc.args.overrides, rendered: make(map[string]map[string]any)}
+			for _, name := range tc.args.rendered {
+				s.rendered[name] = map[string]any{}
+			}
+
+			got := s.namespaceObject(tc.args.component, tc.args.pre, tc.args.post)
+
+			if diff := cmp.Diff(tc.want.name, got); diff != "" {
+				t.Errorf("%s\nnamespaceObject(...): -want, +got:\n%s", tc.reason, diff)
+			}
+			if _, ok := s.rendered[tc.want.name]; tc.want.name != "" && !ok {
+				t.Errorf("%s\nnamespaceObject(...) returned %q without rendering it", tc.reason, tc.want.name)
+			}
+		})
+	}
+}
+
 func TestKeepNamespaces(t *testing.T) {
 	const operator, customizations, other = "nodewright-operator", "nodewright-customizations", "cert-manager"
 

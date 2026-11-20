@@ -23,7 +23,8 @@ order the function works. Each step links to the page that covers it.
    deployed keeps its namespace.
 6. **The manifest files are rendered.** AICR's manifest files are Helm-style
    templates. The function renders them with the component's values and
-   splits them into documents.
+   splits them into documents. A component whose manifests need its
+   namespace before a chart creates it gets an `Object` for the namespace.
 7. **The provider schemas are required.** The function asks Crossplane for
    the `Release` schema when the recipe has a chart, and for the `Object`
    schema when a manifest rendered a document. Until Crossplane has resolved
