@@ -13,6 +13,8 @@ go test -race ./...      # with the race detector
 | `TestRunFunction` | The function end to end at the request level: hand-written requests in, the whole response compared. |
 | `TestCatalogInvariants` | Every leaf recipe of the embedded catalog, for the properties the function relies on. |
 | `TestDRAEvictionAcrossTheCatalog`, `TestDRAEvictionConstants` | The hand copy of AICR's DRA eviction wiring, against the catalog and against AICR's source. |
+| `TestNodeSchedulingAcrossTheCatalog` | Node scheduling on every leaf recipe: with both node selectors set, each component is accepted and every manifest still renders. |
+| `TestEndToEndCatalog` | That the end-to-end suite's catalog resolves to its own components alone. |
 | `TestUpgradeRecords` | That AICR's upgrade records still load and pass AICR's own checks. |
 | `TestGate`, `TestSummary` and the other unit tests | One piece each, with hand-built inputs. |
 | `internal/resolve`, `internal/compose`, `internal/schema` | The packages' own tables. |

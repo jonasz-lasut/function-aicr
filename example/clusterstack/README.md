@@ -45,7 +45,8 @@ copies of them. They cover only the fields the function sets:
 - for the `Release`, `spec.forProvider.chart.{name,repository,version}`,
   `spec.forProvider.namespace`, `spec.forProvider.wait` and
   `spec.forProvider.values`;
-- for the `Object`, `spec.forProvider.manifest`;
+- for the `Object`, `spec.forProvider.manifest` and
+  `spec.managementPolicies`;
 - for both, `spec.providerConfigRef.{kind,name}`.
 
 Each file is an OpenAPI v3 document, the format

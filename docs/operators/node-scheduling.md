@@ -50,8 +50,10 @@ The kind recipes set the GPU Operator's daemon set tolerations to an empty
 list, and so keep the chart's default there whatever `nodeScheduling` says.
 
 A path the registry lists in both groups belongs to a workload that runs on
-every node, such as the worker of Node Feature Discovery. It gets both lists
-of tolerations.
+every node, such as the worker of Node Feature Discovery. It gets the
+accelerated tolerations and those system tolerations that name a key. A
+system toleration without a key, which tolerates every taint, is left out
+of such a path once accelerated tolerations are set.
 
 `componentOverrides.<component>.values` are merged afterward. Use them to
 place one component differently: a list of tolerations there replaces what
@@ -62,17 +64,19 @@ was written, and a node selector is merged into it.
 AICR's command line tolerates every taint when its toleration flags are
 unset. The function writes only what the `Input` states, so an upgrade of
 the function doesn't reschedule a running stack. To get what the command
-line does, state the toleration:
+line does for system workloads, state the toleration:
 
 ```yaml
 nodeScheduling:
   system:
     tolerations:
     - operator: Exists
-  accelerated:
-    tolerations:
-    - operator: Exists
 ```
+
+Give the accelerated workloads tolerations that name a key. On AKS a
+toleration without one deadlocks the first installation of NodeWright's
+packages. AICR's bundler refuses it there, a check the function doesn't
+run.
 
 ## Components that require a node selector
 

@@ -69,11 +69,15 @@ patch.
 3. `go generate ./...`, then review the diff under `test-fixtures/want/`.
    It's exactly what the function now deploys.
 4. Render both [example](../authors/render-locally.md) composite resources.
-5. Re-read AICR's DRA eviction wiring, `injectDRAEvictionLabel` and its
-   helpers in `pkg/bundler/bundler.go`. The function has a hand copy of that
-   logic; `TestDRAEvictionConstants` catches a renamed constant or a moved
-   value path, but not a change in behaviour.
-6. Fix behaviour changes by hand. A component the catalog adds joins every
+5. Re-read AICR's node scheduling pass, `applyNodeSchedulingOverrides` and
+   `validateRequiredNodeSelectors` in `pkg/bundler/bundler.go`, and its DRA
+   eviction wiring, `injectDRAEvictionLabel` and its helpers. The function
+   has a hand copy of both. `TestNodeSchedulingAcrossTheCatalog` and
+   `TestDRAEvictionConstants` catch a registry entry or a constant the copy
+   doesn't cover, but not a change in behaviour.
+6. Label the pull request `e2e:kwok`. The end-to-end suite then deploys a
+   stock recipe of the new catalog onto simulated nodes.
+7. Fix behaviour changes by hand. A component the catalog adds joins every
    `TestRunFunction` fixture that doesn't skip it.
 
 `AGENTS.md` in the repository has the same procedure with more detail.

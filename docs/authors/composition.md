@@ -89,7 +89,8 @@ spec:
 
 The complete XRD is in
 [`example/clusterstack/definition.yaml`][definition]. It also declares
-`profile` and `configuration` under the overlay path, and the status schema.
+`profile`, `configuration` and `nodeScheduling` under the overlay path, and
+the status schema.
 
 ## One composite resource per cluster and namespace
 

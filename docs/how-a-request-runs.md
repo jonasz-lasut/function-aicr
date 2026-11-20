@@ -19,8 +19,10 @@ order the function works. Each step links to the page that covers it.
    by name, and `componentClasses` removes whole classes. See
    [Components and overrides](authors/components.md).
 5. **Values and namespaces are settled.** Each component's values are
-   resolved, `draEviction` is wired when set, and a component that's already
-   deployed keeps its namespace.
+   resolved and `nodeScheduling` is written into them. A component that
+   requires a node selector and has none is Fatal. `draEviction` is wired
+   when set, and a component that's already deployed keeps its namespace.
+   See [Node scheduling](operators/node-scheduling.md).
 6. **The manifest files are rendered.** AICR's manifest files are Helm-style
    templates. The function renders them with the component's values and
    splits them into documents. A component whose manifests need its
