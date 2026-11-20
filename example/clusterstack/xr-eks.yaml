@@ -1,7 +1,7 @@
-# An EKS tier: besides Releases, this recipe carries manifest files — the
-# manifest-only nodewright-customizations component renders its Skyhook tuning
-# CR into a provider-kubernetes Object — so rendering it needs both schemas
-# under schemas/.
+# An EKS stack: besides Releases, this recipe has manifest files. The
+# manifest-only nodewright-customizations component renders its NodeWright
+# tuning resource into a provider-kubernetes Object, so rendering it needs
+# both schemas under schemas/.
 apiVersion: example.org/v1alpha1
 kind: ClusterStack
 metadata:

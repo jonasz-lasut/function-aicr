@@ -1,0 +1,118 @@
+/* The documentation site's palette: a cream page with a green accent, laid
+   over mdBook's built-in themes by overriding their CSS variables.
+
+   The green alludes to NVIDIA's (#76B900) at a lower brightness. That green
+   is too light to read as text on cream (about 2.3:1), so the accent comes
+   in two strengths: --aicr-green for borders, marks and fills, and the
+   darker --aicr-green-text for links, the sidebar's active entry and inline
+   code, which keeps at least 4.5:1 on both creams. Colours only: NVIDIA's
+   name and logo are trademarks and are not embedded. Loaded through
+   book.toml's additional-css. */
+
+:root {
+    --aicr-cream: #FBF7EC;
+    --aicr-cream-deep: #F3ECDA;
+    --aicr-cream-line: #E9E1CC;
+    --aicr-ink: #2B2A26;
+    --aicr-green: #7FA83A;
+    --aicr-green-text: #4A7016;
+    --aicr-green-soft: #E4EDCF;
+    --aicr-green-light: #A6CC62;
+}
+
+/* Light themes: the default theme, and the no-JavaScript fallback. */
+.light,
+html:not(.js) {
+    --bg: var(--aicr-cream);
+    --fg: var(--aicr-ink);
+
+    --sidebar-bg: var(--aicr-cream-deep);
+    --sidebar-fg: var(--aicr-ink);
+    --sidebar-non-existant: #A9A391;
+    --sidebar-active: var(--aicr-green-text);
+    --sidebar-spacer: var(--aicr-cream-line);
+    --sidebar-header-border-color: var(--aicr-green);
+
+    --icons: #7A7566;
+    --icons-hover: var(--aicr-ink);
+
+    --links: var(--aicr-green-text);
+    --inline-code-color: #3A5A10;
+
+    --theme-popup-bg: var(--aicr-cream-deep);
+    --theme-popup-border: #D6CDB4;
+    --theme-hover: var(--aicr-green-soft);
+
+    --quote-bg: #F1F5E4;
+    --quote-border: #CFE0A8;
+
+    --table-border-color: var(--aicr-cream-line);
+    --table-header-bg: var(--aicr-green-soft);
+    --table-alternate-bg: #F6F1E1;
+
+    --searchbar-border-color: #C9C0A6;
+    --searchbar-bg: #FFFDF6;
+    --searchbar-fg: var(--aicr-ink);
+    --searchbar-shadow-color: #B7D48A;
+    --searchresults-li-bg: var(--aicr-green-soft);
+    --search-mark-bg: #CFE39A;
+
+    --footnote-highlight: #B7D48A;
+    /* Same as --sidebar-active, for the copy button's hover. */
+    --copy-button-filter-hover: invert(34%) sepia(63%) saturate(560%) hue-rotate(44deg) brightness(93%) contrast(92%);
+}
+
+/* Code blocks sit on the deeper cream instead of the theme's grey. */
+.light .hljs,
+html:not(.js) .hljs {
+    background: var(--aicr-cream-deep);
+}
+
+/* The rust theme is light too; it keeps its own warm palette but takes the
+   accent where the other light theme does. */
+.rust {
+    --links: var(--aicr-green-text);
+    --sidebar-active: var(--aicr-green-light);
+    --sidebar-header-border-color: var(--aicr-green);
+}
+
+/* Dark themes: navy is the preferred dark theme; coal and ayu take the same
+   accent so switching themes keeps the site's colour. */
+.navy,
+.coal,
+.ayu {
+    --links: var(--aicr-green-light);
+    --sidebar-active: var(--aicr-green-light);
+    --sidebar-header-border-color: var(--aicr-green-light);
+    --inline-code-color: #C3DD95;
+    --quote-bg: #1F2A1C;
+    --quote-border: #3C5327;
+    --theme-hover: #26331F;
+    --search-mark-bg: #4F6F23;
+    --searchresults-li-bg: #26331F;
+    --searchbar-shadow-color: var(--aicr-green-light);
+    --footnote-highlight: #4F6F23;
+    /* Same as --sidebar-active, for the copy button's hover. */
+    --copy-button-filter-hover: invert(78%) sepia(34%) saturate(560%) hue-rotate(38deg) brightness(95%) contrast(90%);
+}
+
+@media (prefers-color-scheme: dark) {
+    html:not(.js) {
+        --links: var(--aicr-green-light);
+        --sidebar-active: var(--aicr-green-light);
+        --sidebar-header-border-color: var(--aicr-green-light);
+        --inline-code-color: #C3DD95;
+        --quote-bg: #1F2A1C;
+        --quote-border: #3C5327;
+        --theme-hover: #26331F;
+        --search-mark-bg: #4F6F23;
+        --searchresults-li-bg: #26331F;
+        --searchbar-shadow-color: var(--aicr-green-light);
+        --footnote-highlight: #4F6F23;
+    }
+}
+
+/* The theme menu marks the selected theme in the accent. */
+.theme-popup .theme-selected {
+    color: var(--links);
+}

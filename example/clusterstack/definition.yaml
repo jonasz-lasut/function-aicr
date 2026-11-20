@@ -42,6 +42,34 @@ spec:
                         type: string
                       platform:
                         type: string
+                  profile:
+                    type: object
+                    additionalProperties:
+                      type: string
+                  configuration:
+                    type: object
+                    properties:
+                      gke:
+                        type: object
+                        properties:
+                          tcpxoInterfaces:
+                            type: array
+                            items:
+                              type: object
+                              required:
+                              - interfaceName
+                              - network
+                              properties:
+                                interfaceName:
+                                  type: string
+                                network:
+                                  type: string
+                            x-kubernetes-list-type: atomic
+                      runtimeInventory:
+                        type: object
+                        properties:
+                          mode:
+                            type: string
           status:
             type: object
             properties:

@@ -127,10 +127,13 @@ function-aicr/
 ├── package/
 │   ├── crossplane.yaml      # Function package metadata
 │   └── input/               # GENERATED Input CRD
+├── docs/                    # The documentation site's pages (mdBook; SUMMARY.md is the table of contents)
+├── book.toml                # mdBook configuration; docs/theme/aicr.css is the palette
+├── .vale.ini                # Vale prose lint over README.md, docs/ and the example README
 ├── example/clusterstack/    # XRD, Composition, XRs, schema stand-ins, render walkthrough
 ├── extensions/icons/        # Package icon; supplychain.yml appends it, README.md and an SBOM to the mirror image
 ├── .claude/skills/          # cut-release, remediate-cves (release procedures)
-├── .github/workflows/       # ci (check-diff, lint, unit-test), publish-pkg, tag, grype-scan, supplychain
+├── .github/workflows/       # ci (check-diff, lint, unit-test), docs, publish-pkg, tag, grype-scan, supplychain
 ├── .github/renovate.json5   # Renovate: grouped bump PRs; aicr bumps wait for dependency-dashboard approval
 ├── .golangci.yml            # Lint configuration (golangci-lint v2)
 └── Dockerfile               # Distroless runtime image; Go version comes from go.mod
@@ -160,13 +163,13 @@ type Input struct {
 }
 ```
 
-The user-facing field reference lives in `README.md` ("Input reference"); keep it in sync with `input/v1beta1/input.go`.
+The user-facing field reference is `docs/operators/input-reference.md`; keep it in sync with `input/v1beta1/input.go`.
 
 ### The recipe source
 
-The recipe catalog is function-level configuration, not part of the `Input`: by default the FS embedded in the pinned `aicr.run` module, optionally overlaid with a digest-pinned OCI recipe artifact via the `--recipe-oci-repository` / `--recipe-oci-digest` flags (`RECIPE_OCI_REPOSITORY` / `RECIPE_OCI_DIGEST`). `newDataProvider` (main.go) pulls the artifact **once at startup** through `aicr/pkg/recipe/ocisource` — never per request, so no reconcile waits on a registry — and a pull failure exits the process rather than falling back to embedded data. `ociPullOptions` requires both flags together and an immutable `sha256:` manifest digest (AICR refuses to materialize tag-selected artifacts anyway). The overlay's `repository@digest` identity is threaded through `Function.recipeSource` into the summary. Registry credentials come from the Docker config (`DOCKER_CONFIG`), connections are HTTPS-only, and extraction needs a writable temp dir (`TMPDIR`); see the README's "Recipe source" section for the deployment wiring.
+The recipe catalog is function-level configuration, not part of the `Input`: by default the FS embedded in the pinned `aicr.run` module, optionally overlaid with a digest-pinned OCI recipe artifact via the `--recipe-oci-repository` / `--recipe-oci-digest` flags (`RECIPE_OCI_REPOSITORY` / `RECIPE_OCI_DIGEST`). `newDataProvider` (main.go) pulls the artifact **once at startup** through `aicr/pkg/recipe/ocisource` — never per request, so no reconcile waits on a registry — and a pull failure exits the process rather than falling back to embedded data. `ociPullOptions` requires both flags together and an immutable `sha256:` manifest digest (AICR refuses to materialize tag-selected artifacts anyway). The overlay's `repository@digest` identity is threaded through `Function.recipeSource` into the summary. Registry credentials come from the Docker config (`DOCKER_CONFIG`), connections are HTTPS-only, and extraction needs a writable temp dir (`TMPDIR`); see `docs/operators/recipe-source.md` for the deployment wiring.
 
-The recipe source is also the only way to opt in to one of AICR's opt-in mixins (the NVSentinel remediation steps, `nvsentinel-observability`, the `NVIDIADriver` wiring): a mixin applies only when an overlay lists it under `spec.mixins`, and no build option selects one. The README's "Opting in to a mixin" shows the two-file artifact. It was verified end to end on 2026-11-20 against a local TLS registry: a tarball pushed with `oras push <file>:application/vnd.oci.image.layer.v1.tar+gzip` is accepted, while the layer `oras` packs from a directory is refused with "OCI recipe layer contains an unsafe archive path component" because the archive has a `.` entry.
+The recipe source is also the only way to opt in to one of AICR's opt-in mixins (the NVSentinel remediation steps, `nvsentinel-observability`, the `NVIDIADriver` wiring): a mixin applies only when an overlay lists it under `spec.mixins`, and no build option selects one. `docs/operators/mixins.md` shows the two-file artifact. It was verified end to end on 2026-11-20 against a local TLS registry: a tarball pushed with `oras push <file>:application/vnd.oci.image.layer.v1.tar+gzip` is accepted, while the layer `oras` packs from a directory is refused with "OCI recipe layer contains an unsafe archive path component" because the archive has a `.` entry.
 
 ### Input resolution
 
@@ -310,6 +313,20 @@ Compare with `go-cmp` — `cmp.Diff(want, got)`, using `cmp.AllowUnexported` / `
 
 `go generate` visits only files with the `generate` build tag; do not build a standalone generator program for the goldens (it would force the code under test out of `package main`), and never build with `-tags generate` yourself. Test binaries carry no module list in build info, so `fn_test.go` pins `testRecipeVersion = "v0.0.0-test"` where `main.go` would read the real aicr version.
 
+### Documentation
+
+The documentation is an mdBook site built from `docs/` (`book.toml`; `docs/SUMMARY.md` lists the pages, and a page that is not listed is not rendered). `.github/workflows/docs.yml` builds it, checks its links and lints its prose on every pull request that touches it, and deploys `main` to GitHub Pages.
+
+```bash
+mdbook serve                 # preview at http://localhost:3000
+mdbook build                 # into book/ (gitignored)
+vale sync                    # fetch the style packages .vale.ini pins, once
+vale README.md example/clusterstack/README.md docs
+lychee --offline --include-fragments --exclude-path book/404.html 'book/**/*.html' README.md
+```
+
+Any Vale alert fails CI, warnings included. Fix the prose rather than the configuration; `.vale.ini` turns a rule off only with the reason beside it, and `.vale/styles/config/vocabularies/Aicr/accept.txt` holds the project's terms. A change in behaviour is documented in the page that covers it, not in `README.md`, which is only the landing page (it is also what the package's mirror image publishes). The pages are written for a reader who has not seen the code: no first person, contractions, sentence-case headings, a short dash or a colon and never an em dash.
+
 ### Linting
 
 ```bash
@@ -333,7 +350,7 @@ Configuration is `.golangci.yml` (golangci-lint v2, the version CI pins is in `.
 2. `go generate ./...` — regenerates deepcopy and the CRD under `package/input/`
 3. Wire it in `fn.go`. The overlay can set the new field with no further code; declare it in the example XRD if a composite resource should control it
 4. Add a `test-fixtures/input/*.yaml` fixture and a `TestRunFunction` case; name a new golden if it changes desired state, then `go generate ./...` and review `test-fixtures/want/`
-5. Document it in the README's "Input reference" table
+5. Document it in `docs/operators/input-reference.md`, and in the page that covers its behaviour
 
 ### Bumping the AICR Module
 
@@ -428,7 +445,8 @@ AICR's pull budget is minutes (staging, digest authorization, extraction) while 
 
 ## Key Reference Documents
 
-- `README.md` — user-facing behaviour, the Input reference, the required-schemas contract and gating rules
+- `docs/` — the documentation site (https://jonasz-lasut.github.io/function-aicr/): user-facing behaviour, the Input reference, the required-schemas contract, gating rules, upgrades and troubleshooting
+- `README.md` — the landing page: the pitch, a quick start and links into the site
 - `example/clusterstack/README.md` — `crossplane render` walkthrough and the `--required-schemas` format
 - `input/v1beta1/input.go` — authoritative Input schema
 - `test-fixtures/generate.go` — how the goldens are produced
