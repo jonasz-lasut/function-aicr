@@ -145,6 +145,55 @@ The rules, all AICR's own:
   temporary directory (`TMPDIR`; mount an `emptyDir` when the container
   filesystem is read-only).
 
+### Opting in to a mixin
+
+AICR's catalog has opt-in mixins that no stock recipe includes, such as the
+graded NVSentinel remediation steps or `nvsentinel-observability`. A recipe
+takes a mixin only when a catalog overlay lists it, and AICR has no criteria
+value or flag for that, so the recipe source is how a function deployment
+opts in. The artifact needs two small files: a `registry.yaml` with nothing
+but its header, and an overlay that extends the stock recipe.
+
+```yaml
+# registry.yaml
+apiVersion: aicr.run/v1beta1
+kind: ComponentRegistry
+components: []
+```
+
+```yaml
+# overlays/h100-kind-training-observability.yaml
+kind: RecipeMetadata
+apiVersion: aicr.run/v1beta1
+metadata:
+  name: h100-kind-training-observability
+spec:
+  base: h100-kind-training
+  criteria:
+    service: kind
+    accelerator: h100
+    intent: training
+  mixins:
+  - nvsentinel-observability
+```
+
+The overlay names the stock recipe as its `base` and repeats its criteria, so
+every composite resource that resolves that recipe gets the mixin. Publish
+the two files as one gzipped tar layer with AICR's artifact type:
+
+```shell
+tar -czf recipes.tar.gz registry.yaml overlays
+oras push --artifact-type application/vnd.nvidia.aicr.artifact \
+  ghcr.io/acme/aicr-recipes:observability \
+  recipes.tar.gz:application/vnd.oci.image.layer.v1.tar+gzip
+```
+
+`oras` prints the manifest digest to pass as `--recipe-oci-digest`. Build the
+tarball yourself, as above: AICR refuses the layer `oras` packs from a
+directory, because its archive has a `.` entry. With the function running on
+that artifact, the summary lists the overlay under `appliedOverlays` and the
+`nvsentinel` `Release` has the mixin's values.
+
 ## Why Crossplane?
 
 AICR renders a recipe into Helm, Argo CD, Flux or Helmfile bundles. Running
