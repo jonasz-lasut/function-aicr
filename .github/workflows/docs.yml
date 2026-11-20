@@ -1,0 +1,155 @@
+# Copyright 2026 The function-aicr Authors.
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+#     http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The documentation site (book.toml, docs/): built and link-checked on every
+# pull request that touches it, with the prose linted by Vale, and deployed
+# to GitHub Pages from main.
+name: Docs
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'docs/**'
+      - 'book.toml'
+      - 'README.md'
+      - 'example/clusterstack/README.md'
+      - '.vale.ini'
+      - '.vale/**'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'book.toml'
+      - 'README.md'
+      - 'example/clusterstack/README.md'
+      - '.vale.ini'
+      - '.vale/**'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    env:
+      # mdBook publishes no checksum file, so the release tarball's digest is
+      # pinned here and moves by hand with the version.
+      MDBOOK_VERSION: 'v0.5.4'
+      MDBOOK_SHA256: 3f28de05dafca9d0f2eab99c662116b0e37b89b1d96a08f8f430b9eeae958cd7
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install mdBook
+        run: |
+          curl -fsSL -o "${RUNNER_TEMP}/mdbook.tar.gz" \
+            "https://github.com/rust-lang/mdBook/releases/download/${MDBOOK_VERSION}/mdbook-${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${MDBOOK_SHA256}  ${RUNNER_TEMP}/mdbook.tar.gz" | sha256sum -c -
+          mkdir -p "${RUNNER_TEMP}/mdbook"
+          tar -xzf "${RUNNER_TEMP}/mdbook.tar.gz" -C "${RUNNER_TEMP}/mdbook"
+          echo "${RUNNER_TEMP}/mdbook" >> "$GITHUB_PATH"
+
+      - name: Build the Book
+        run: mdbook build
+
+      # Offline: the pages' links into each other and their fragments. The
+      # README's links to the published site are not checked, since a page
+      # added by a pull request is not published yet.
+      - name: Check Links
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          lycheeVersion: v0.24.2
+          args: >-
+            --offline
+            --include-fragments
+            --no-progress
+            --exclude-path book/404.html
+            'book/**/*.html'
+            README.md
+            example/clusterstack/README.md
+          fail: true
+          failIfEmpty: true
+
+      - name: Upload the Site
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: book
+
+  prose:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    env:
+      VALE_VERSION: '3.27.0'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The release tarball, checked against the release's checksum file.
+      - name: Install Vale
+        run: |
+          base="https://github.com/errata-ai/vale/releases/download/v${VALE_VERSION}"
+          asset="vale_${VALE_VERSION}_Linux_64-bit.tar.gz"
+          curl -fsSL -o "${RUNNER_TEMP}/${asset}" "${base}/${asset}"
+          curl -fsSL -o "${RUNNER_TEMP}/checksums.txt" "${base}/vale_${VALE_VERSION}_checksums.txt"
+          (cd "${RUNNER_TEMP}" && grep " ${asset}\$" checksums.txt | sha256sum -c -)
+          mkdir -p "${RUNNER_TEMP}/vale"
+          tar -xzf "${RUNNER_TEMP}/${asset}" -C "${RUNNER_TEMP}/vale" vale
+          echo "${RUNNER_TEMP}/vale" >> "$GITHUB_PATH"
+
+      # Every alert fails, warnings included (Vale's own exit code is 1 for
+      # errors only). A run that printed nothing but did not exit 0 is a
+      # broken configuration, which fails too.
+      - name: Lint the Prose
+        run: |
+          vale sync
+          if out=$(vale --output=line README.md example/clusterstack/README.md docs); then status=0; else status=$?; fi
+          if [ -n "$out" ]; then
+            printf '%s\n' "$out"
+            echo "vale: $(printf '%s\n' "$out" | wc -l | tr -d ' ') alerts"
+            exit 1
+          fi
+          if [ "$status" -ne 0 ]; then
+            echo "vale: exited $status with no alerts"
+            exit "$status"
+          fi
+          echo "vale: no alerts"
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Configure Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

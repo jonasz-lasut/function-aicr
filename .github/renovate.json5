@@ -34,6 +34,17 @@
       datasourceTemplate: 'github-releases',
     },
     {
+      // Vale version the docs workflow installs; its checksum comes from the
+      // release's own checksum file, so only the version is pinned.
+      customType: 'regex',
+      description: 'VALE_VERSION in .github/workflows',
+      managerFilePatterns: ['/^\\.github/workflows/[^/]+\\.ya?ml$/'],
+      matchStrings: ["VALE_VERSION: '(?<currentValue>[^']+)'"],
+      depNameTemplate: 'errata-ai/vale',
+      datasourceTemplate: 'github-releases',
+      extractVersionTemplate: '^v(?<version>.*)$',
+    },
+    {
       // Crossplane CLI version installed by install.sh in the release workflows.
       // Since v2.3.0 the CLI is released from crossplane/cli (XP_CHANNEL=stable).
       customType: 'regex',
