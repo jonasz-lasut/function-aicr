@@ -95,13 +95,13 @@ func providerConfigRef(pcRef ProviderConfigRef) map[string]any {
 }
 
 // SplitChart derives the provider-helm repository and chart name from an AICR
-// component's source and chart. For OCI sources whose path already ends in the
-// chart name, the chart segment is trimmed so provider-helm does not double it.
+// component's source and chart. An OCI chart is at the source with the chart
+// name appended, which is how AICR's deployers form the reference and how
+// provider-helm joins the two. That holds when the source already ends in the
+// chart's name: kai-scheduler is at
+// oci://ghcr.io/kai-scheduler/kai-scheduler/kai-scheduler.
 func SplitChart(source, chart string) (repository, name string) {
-	if strings.HasPrefix(source, "oci://") {
-		return strings.TrimSuffix(source, "/"+chart), chart
-	}
-	return source, chart
+	return strings.TrimRight(source, "/"), chart
 }
 
 // MergeValues deep-merges override onto base and never mutates either;

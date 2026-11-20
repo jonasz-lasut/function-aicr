@@ -7,7 +7,7 @@ spec:
   forProvider:
     chart:
       name: kai-scheduler
-      repository: oci://ghcr.io/kai-scheduler
+      repository: oci://ghcr.io/kai-scheduler/kai-scheduler
       version: v0.16.9
     namespace: kai-scheduler
     values:
