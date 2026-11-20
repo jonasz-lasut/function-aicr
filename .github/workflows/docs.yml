@@ -138,11 +138,17 @@ jobs:
           fi
           echo "vale: no alerts"
 
+  # Only main is published, and only when the prose lint passed too. Runs
+  # queue instead of cancelling each other, so the site always ends at the
+  # newest commit.
   deploy:
-    if: github.event_name != 'pull_request'
-    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: [build, prose]
     runs-on: ubuntu-26.04
     timeout-minutes: 10
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     permissions:
       pages: write
       id-token: write

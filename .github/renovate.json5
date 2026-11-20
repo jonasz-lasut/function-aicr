@@ -8,6 +8,11 @@
     // The repo uses conventional commits; a routine bump is a chore, not a fix.
     ':semanticCommitTypeAll(chore)',
   ],
+  // config:recommended ignores every path with a `test` directory in it,
+  // which would leave the end-to-end suite's own Go module (test/e2e/go.mod)
+  // without updates. Nothing in this repository is vendored or generated
+  // from another package manager, so nothing needs ignoring.
+  ignorePaths: [],
   // The dependency surfaces: go.mod, the workflows (actions and the CLI
   // versions in their env), the Function package refs under example/, and
   // the Dockerfile. go.mod is the single source of truth for the Go version
