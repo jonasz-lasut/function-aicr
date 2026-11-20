@@ -1,10 +1,14 @@
 package e2e
 
 import (
+	"strings"
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/e2e-framework/klient/k8s"
+	"sigs.k8s.io/e2e-framework/klient/k8s/resources"
 	"sigs.k8s.io/e2e-framework/pkg/features"
 
 	apiextensionsv1 "github.com/crossplane/crossplane/apis/v2/apiextensions/v1"
@@ -26,9 +30,9 @@ const LabelAreaStockRecipe = "stock-recipe"
 // with its real charts. KWOK reports a pod on a simulated node as running
 // without starting a container, so the feature proves what the suite's own
 // catalog cannot: the charts are pulled from their registries, their
-// manifests are accepted by the API server, every pod finds a node through
-// nodeScheduling, and provider-helm sees each release become ready in AICR's
-// order. No operator reconciles anything.
+// manifests are accepted by the API server, nodeScheduling places their pods
+// on the simulated node pools, and provider-helm sees each release become
+// ready in AICR's order. No operator reconciles anything.
 func TestStockRecipeOnSimulatedNodes(t *testing.T) {
 	const (
 		manifests = "manifests/kwok"
@@ -64,6 +68,14 @@ func TestStockRecipeOnSimulatedNodes(t *testing.T) {
 				funcs.ResourceHasConditionWithin(1*time.Minute, release("kai-scheduler"), xpv2.Available()),
 				funcs.ResourceHasConditionWithin(1*time.Minute, release("kube-prometheus-stack"), xpv2.Available()),
 			)).
+			Assess("SystemWorkloadsRunOnSystemNodes",
+				// cert-manager's pods are all system workloads in AICR's
+				// registry, and the simulated system nodes are system-0 and
+				// system-1.
+				funcs.ListedResourcesValidatedWithin(1*time.Minute, &corev1.PodList{}, 3, func(o k8s.Object) bool {
+					pod, ok := o.(*corev1.Pod)
+					return ok && strings.HasPrefix(pod.Spec.NodeName, "system-")
+				}, resources.WithFieldSelector("metadata.namespace=cert-manager"))).
 			WithTeardown("DeleteXR", funcs.AllOf(
 				funcs.DeleteResourcesWithPropagationPolicy(manifests, xr, metav1.DeletePropagationForeground),
 				funcs.ResourcesDeletedWithin(10*time.Minute, manifests, xr),

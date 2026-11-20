@@ -8,8 +8,8 @@ cluster itself.
 The suite deploys a catalog of its own, `catalog/`: three small components
 with one chart that starts a pause container. The catalog is published to a
 registry in the cluster and given to the function as its OCI recipe source.
-A run pulls nothing from outside the cluster but the packages, and takes a
-few minutes.
+Besides the packages and the registry's image, a run pulls nothing from
+outside the cluster.
 
 It follows [the suite of `crossplane/crossplane`][crossplane-e2e]. Features
 are built with [`sigs.k8s.io/e2e-framework`][e2e-framework], run through
@@ -20,7 +20,17 @@ Crossplane's dependency tree doesn't enter the function's `go.mod`.
 
 ## Run it
 
-Docker has to be running. From the repository root:
+Docker has to be running. Each profile has a kind cluster of its own,
+`function-aicr-e2e-catalog` or `function-aicr-e2e-kwok`, and the Makefile
+keeps that cluster's kubeconfig in a file of its own. The targets and the
+suite read that file alone, so they can't reach another cluster. To use
+`kubectl` on the cluster yourself:
+
+```shell
+export KUBECONFIG=$PWD/_output/e2e/kubeconfig-catalog
+```
+
+From the repository root:
 
 ```shell
 git submodule update --init   # the Crossplane build submodule, once
@@ -150,10 +160,12 @@ A feature is a `Test...` function in this package that hands
 its manifests under `manifests/<area>/<feature>/` and apply them with
 `funcs.ApplyResources`.
 
-The features in `recipe_test.go` share the XRD and the Composition under
+The recipe features share the XRD and the Composition under
 `manifests/recipe/setup` and each creates one composite resource. They run
-one at a time and delete what they created: two composite resources with the
-same recipe would install the same Helm releases.
+one at a time, and each deletes its composite resource and waits for the
+releases to be gone: two composite resources with the same recipe would
+install the same Helm releases. The namespaces of the charts remain, as
+they do after `helm uninstall`.
 
 [crossplane-e2e]: https://github.com/crossplane/crossplane/tree/main/test/e2e
 [aicr-kwok]: https://github.com/NVIDIA/aicr/tree/main/kwok

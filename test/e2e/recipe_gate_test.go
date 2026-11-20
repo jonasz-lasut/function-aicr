@@ -76,6 +76,7 @@ func TestRolloutSteps(t *testing.T) {
 			)).
 			WithTeardown("DeleteXR", deleteXR(xr)).
 			WithTeardown("DeleteQuota", DeleteIfExists(quota)).
+			WithTeardown("DeleteNamespace", DeleteNamespaces(3*time.Minute, componentSecond)).
 			WithTeardown("UnlabelNodes", UnlabelNodes(secondLabel)).
 			WithTeardown("DeletePrerequisites", deletePrerequisites()).
 			Feature(),
@@ -101,6 +102,7 @@ func TestLiveResourcesAreKept(t *testing.T) {
 				funcs.ResourcesHaveConditionWithin(3*time.Minute, recipeManifests, xr, xpv2.Available(), xpv2.ReconcileSuccess())).
 			Assess("DependencyGoesUnready", funcs.AllOf(
 				PauseReconciliation(release(componentFirst)),
+				funcs.ResourceHasConditionWithin(1*time.Minute, release(componentFirst), xpv2.ReconcilePaused()),
 				MarkUnready(release(componentFirst)),
 				funcs.ResourcesHaveConditionWithin(2*time.Minute, recipeManifests, xr, xpv2.Creating()),
 			)).

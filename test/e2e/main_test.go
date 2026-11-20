@@ -53,11 +53,10 @@ func TestMain(m *testing.M) {
 		finish []env.Func
 	)
 
-	// The cluster is `make e2e.up`'s: the suite finds it through the current
-	// kubeconfig unless it is told to create one of its own.
-	if !environment.IsKindCluster() {
-		cfg.WithKubeconfigFile(conf.ResolveKubeConfigFile())
-	}
+	// The cluster is `make e2e.up`'s, which the suite neither creates nor
+	// destroys. It is found through KUBECONFIG, which the Makefile points at
+	// a file that holds that cluster alone.
+	cfg.WithKubeconfigFile(conf.ResolveKubeConfigFile())
 
 	// Enrich the selected labels with the ones from the suite.
 	// Not replacing the user provided ones if any.

@@ -25,10 +25,17 @@ ifeq (,$(wildcard build/makelib/common.mk))
 $(error the crossplane build submodule is missing: run git submodule update --init)
 endif
 
+# The suite's profile (see "The end-to-end suite" below). Each has a cluster
+# and a kubeconfig of its own.
+E2E_PROFILE ?= catalog
+ifeq (,$(filter $(E2E_PROFILE),catalog kwok))
+$(error E2E_PROFILE is $(E2E_PROFILE): it must be catalog or kwok)
+endif
+
 # The cluster the suite provisions and what it installs there. All are
 # overridable from the environment. Renovate moves the defaults through the
 # `# renovate:` comments.
-KIND_CLUSTER_NAME ?= function-aicr-e2e
+KIND_CLUSTER_NAME ?= function-aicr-e2e-$(E2E_PROFILE)
 # The chart version, so without the release tag's `v`.
 # renovate: datasource=github-releases depName=crossplane/crossplane extractVersion=^v(?<version>.*)$
 CROSSPLANE_VERSION ?= 2.4.3
@@ -107,6 +114,11 @@ $(ORAS):
 #                    described and logged first
 E2E_IMAGE := function-aicr-e2e:dev
 E2E_DIR := $(OUTPUT_DIR)/e2e
+# The cluster's kubeconfig. Every target and the suite itself read this file
+# and no other, so nothing here reaches another cluster, whatever the current
+# context of the developer's own kubeconfig is. To look at the cluster:
+# export KUBECONFIG=$PWD/_output/e2e/kubeconfig-catalog
+export KUBECONFIG := $(abspath $(E2E_DIR)/kubeconfig-$(E2E_PROFILE))
 E2E_CERTS := $(E2E_DIR)/certs
 E2E_NAMESPACE := e2e
 E2E_MANIFESTS := test/e2e/manifests/setup
@@ -120,10 +132,6 @@ E2E_CATALOG_OUT := $(E2E_DIR)/catalog
 # The recipe catalog's repository; the function is given its manifest digest.
 E2E_RECIPE_REPOSITORY := recipes/e2e
 FUNCTION_RUNTIME_CONFIG := function-aicr-e2e
-E2E_PROFILE ?= catalog
-ifeq (,$(filter $(E2E_PROFILE),catalog kwok))
-$(error E2E_PROFILE is $(E2E_PROFILE): it must be catalog or kwok)
-endif
 KWOK_RELEASE := https://github.com/kubernetes-sigs/kwok/releases/download/$(KWOK_VERSION)
 E2E_KWOK_MANIFESTS := test/e2e/manifests/kwok
 # The features to run: crossplane's e2e environment selects them by suite.
@@ -134,17 +142,23 @@ E2E_TEST_SUITE_kwok := kwok
 E2E_TEST_FLAGS ?= -v -count=1 -timeout=30m
 E2E_ENV_FLAGS := --kind-cluster-name=$(KIND_CLUSTER_NAME) --create-kind-cluster=false --destroy-kind-cluster=false --preinstall-crossplane=false --load-images-kind-cluster=false --test-suite=$(E2E_TEST_SUITE_$(E2E_PROFILE))
 
-.PHONY: e2e.up e2e.crossplane e2e.setup e2e.certs e2e.catalog e2e.kwok e2e.image e2e.function e2e.test e2e.down e2e.dump xpkg.build.function-aicr
+.PHONY: e2e.up e2e.kubeconfig e2e.crossplane e2e.setup e2e.certs e2e.catalog e2e.kwok e2e.image e2e.function e2e.test e2e.down e2e.dump xpkg.build.function-aicr
 
 e2e.init: e2e.up
 e2e.run: e2e.test
 e2e.done: e2e.down
 
-e2e.up: controlplane.up e2e.crossplane
+e2e.up: e2e.kubeconfig controlplane.up e2e.crossplane
 	@$(MAKE) e2e.setup
 	@$(MAKE) e2e.$(E2E_PROFILE)
 	@$(MAKE) e2e.function
 	@$(OK) the end-to-end cluster is up: make e2e.test runs the suite
+
+# A cluster that outlived its kubeconfig, as after `rm -rf _output`, gets it
+# back; controlplane.up selects the context and would fail without it.
+e2e.kubeconfig: $(KIND)
+	@mkdir -p $(E2E_DIR)
+	@$(KIND) export kubeconfig --name $(KIND_CLUSTER_NAME) >/dev/null 2>&1 || true
 
 # controlplane.up returns as soon as the chart is installed; Crossplane's
 # init container registers the package CRDs after that.
@@ -204,12 +218,20 @@ e2e.catalog: $(KUBECTL) $(HELM) $(ORAS) e2e.certs
 		trap "kill $$forward" EXIT; \
 		local=localhost:$(E2E_REGISTRY_LOCAL_PORT); ca=$(abspath $(E2E_CERTS)/ca.crt); \
 		for try in $$(seq 30); do curl -fsS --cacert $$ca https://$$local/v2/ >/dev/null 2>&1 && break; sleep 1; done; \
-		for chart in $(E2E_CATALOG_OUT)/*.tgz; do $(HELM) push $$chart oci://$$local/charts --ca-file $$ca >/dev/null 2>&1 || exit 1; done; \
+		for chart in $(E2E_CATALOG_OUT)/*.tgz; do $(HELM) push $$chart oci://$$local/charts --ca-file $$ca >/dev/null || exit 1; done; \
 		cd $(E2E_CATALOG_OUT) && $(ORAS) push --plain-http=false --ca-file $$ca --artifact-type application/vnd.nvidia.aicr.artifact \
 			$$local/$(E2E_RECIPE_REPOSITORY):e2e recipe.tar.gz:application/vnd.oci.image.layer.v1.tar+gzip >/dev/null && \
 		$(ORAS) resolve --plain-http=false --ca-file $$ca $$local/$(E2E_RECIPE_REPOSITORY):e2e > recipe.digest || $(FAIL)
 	@sed -e 's|RECIPE_OCI_REPOSITORY|$(E2E_REGISTRY)/$(E2E_RECIPE_REPOSITORY)|' -e "s|RECIPE_OCI_DIGEST|$$(cat $(E2E_CATALOG_OUT)/recipe.digest)|" \
 		$(E2E_MANIFESTS)/function-runtime.yaml | $(KUBECTL) apply -f - || $(FAIL)
+	@if $(KUBECTL) get function.pkg.crossplane.io/function-aicr >/dev/null 2>&1; then \
+		digest=$$(cat $(E2E_CATALOG_OUT)/recipe.digest); \
+		for try in $$(seq 90); do \
+			$(KUBECTL) -n $(CROSSPLANE_NAMESPACE) get pods -l pkg.crossplane.io/function=function-aicr --field-selector=status.phase=Running \
+				-o jsonpath='{.items[*].spec.containers[0].args}' | grep -q "$$digest" && break; sleep 2; \
+		done; \
+		$(KUBECTL) -n $(CROSSPLANE_NAMESPACE) wait pod -l pkg.crossplane.io/function=function-aicr --for=condition=Ready --timeout=300s || $(FAIL); \
+	fi
 	@$(OK) publishing the charts and the recipe catalog: $$(cat $(E2E_CATALOG_OUT)/recipe.digest)
 
 # What AICR's `make kwok-cluster` and `make kwok-nodes` do to a kind cluster:
@@ -230,10 +252,11 @@ e2e.kwok: $(KUBECTL)
 	@sed -e '/recipe-oci/d' $(E2E_MANIFESTS)/function-runtime.yaml | $(KUBECTL) apply -f - || $(FAIL)
 	@$(OK) installing KWOK $(KWOK_VERSION) and the simulated nodes
 
-# The runtime image from this tree, built for the host's architecture.
+# The runtime image from this tree, built for the host's architecture with
+# the Go version go.mod names, as the release workflow builds it.
 e2e.image:
 	@$(INFO) building the runtime image $(E2E_IMAGE) for linux/$(TARGETARCH)
-	@docker buildx build --load --platform linux/$(TARGETARCH) -t $(E2E_IMAGE) . || $(FAIL)
+	@docker buildx build --load --platform linux/$(TARGETARCH) --build-arg GO_VERSION=$$(sed -n 's/^go //p' go.mod) -t $(E2E_IMAGE) . || $(FAIL)
 	@$(OK) building the runtime image $(E2E_IMAGE)
 
 # The Function package from the image: what xpkg.mk's xpkg.build.% would do
@@ -255,17 +278,20 @@ local.xpkg.deploy.function.%: $(KIND) $(KUBECTL) local.xpkg.sync
 	@$(OK) deploying function package $* $(VERSION)
 
 # The pod is restarted so that a rebuilt image under the same tag is the one
-# that runs.
+# that runs. The Function reports Healthy from its last revision's state,
+# which the pod's deletion does not change at once, so the new pod is waited
+# for by itself.
 e2e.function: xpkg.build.function-aicr local.xpkg.deploy.function.function-aicr
 	@$(INFO) waiting for function-aicr to become healthy
-	@$(KUBECTL) -n $(CROSSPLANE_NAMESPACE) delete pod -l pkg.crossplane.io/function=function-aicr --ignore-not-found --wait=false >/dev/null || $(FAIL)
+	@$(KUBECTL) -n $(CROSSPLANE_NAMESPACE) delete pod -l pkg.crossplane.io/function=function-aicr --ignore-not-found >/dev/null || $(FAIL)
 	@$(KUBECTL) wait function.pkg.crossplane.io/function-aicr --for=condition=Healthy --timeout=300s || $(FAIL)
+	@for try in $$(seq 60); do $(KUBECTL) -n $(CROSSPLANE_NAMESPACE) get pods -l pkg.crossplane.io/function=function-aicr -o name | grep -q . && break; sleep 2; done
+	@$(KUBECTL) -n $(CROSSPLANE_NAMESPACE) wait pod -l pkg.crossplane.io/function=function-aicr --for=condition=Ready --timeout=300s || $(FAIL)
 	@$(OK) waiting for function-aicr to become healthy
 
 e2e.test:
 	@$(INFO) running the end-to-end suite
-	@cd test/e2e && E2E_REGISTRY=$(E2E_REGISTRY) E2E_REGISTRY_CA=$(abspath $(E2E_CERTS)/ca.crt) \
-		go test $(E2E_TEST_FLAGS) ./... -args $(E2E_ENV_FLAGS) || $(FAIL)
+	@cd test/e2e && go test $(E2E_TEST_FLAGS) ./... -args $(E2E_ENV_FLAGS) || $(FAIL)
 	@$(OK) running the end-to-end suite
 
 e2e.down: controlplane.down

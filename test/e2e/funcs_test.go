@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/e2e-framework/klient/k8s"
 	"sigs.k8s.io/e2e-framework/klient/wait"
 	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
@@ -218,37 +219,42 @@ func patchAnnotation(o *unstructured.Unstructured, key string, value any) featur
 
 // MarkUnready sets the Ready condition of a managed resource to False, as its
 // provider would when the external resource stops being available. The
-// resource has to be paused, or its provider sets the condition back.
+// resource has to be paused, or its provider sets the condition back. The
+// provider still writes to a paused resource's status, to say it is paused,
+// so the update is retried when it loses that race.
 func MarkUnready(o *unstructured.Unstructured) features.Func {
 	return func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 		t.Helper()
 
-		if err := c.Client().Resources().Get(ctx, o.GetName(), o.GetNamespace(), o); err != nil {
-			t.Fatalf("cannot get %s %s/%s: %v", o.GetKind(), o.GetNamespace(), o.GetName(), err)
-		}
-
-		conditions, _, err := unstructured.NestedSlice(o.Object, "status", "conditions")
-		if err != nil {
-			t.Fatalf("cannot read the conditions of %s %s/%s: %v", o.GetKind(), o.GetNamespace(), o.GetName(), err)
-		}
-
-		for _, entry := range conditions {
-			condition, ok := entry.(map[string]any)
-			if !ok || condition["type"] != "Ready" {
-				continue
+		err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			if err := c.Client().Resources().Get(ctx, o.GetName(), o.GetNamespace(), o); err != nil {
+				return err
 			}
 
-			condition["status"] = string(corev1.ConditionFalse)
-			condition["reason"] = "Unavailable"
-			condition["lastTransitionTime"] = metav1.Now().UTC().Format(time.RFC3339)
-		}
+			conditions, _, err := unstructured.NestedSlice(o.Object, "status", "conditions")
+			if err != nil {
+				return err
+			}
 
-		if err := unstructured.SetNestedSlice(o.Object, conditions, "status", "conditions"); err != nil {
-			t.Fatalf("cannot set the conditions of %s %s/%s: %v", o.GetKind(), o.GetNamespace(), o.GetName(), err)
-		}
+			for _, entry := range conditions {
+				condition, ok := entry.(map[string]any)
+				if !ok || condition["type"] != "Ready" {
+					continue
+				}
 
-		if err := c.Client().Resources().UpdateStatus(ctx, o); err != nil {
-			t.Fatalf("cannot update the status of %s %s/%s: %v", o.GetKind(), o.GetNamespace(), o.GetName(), err)
+				condition["status"] = string(corev1.ConditionFalse)
+				condition["reason"] = "Unavailable"
+				condition["lastTransitionTime"] = metav1.Now().UTC().Format(time.RFC3339)
+			}
+
+			if err := unstructured.SetNestedSlice(o.Object, conditions, "status", "conditions"); err != nil {
+				return err
+			}
+
+			return c.Client().Resources().UpdateStatus(ctx, o)
+		})
+		if err != nil {
+			t.Fatalf("cannot set the Ready condition of %s %s/%s to False: %v", o.GetKind(), o.GetNamespace(), o.GetName(), err)
 		}
 
 		t.Logf("%s %s/%s: Ready set to False", o.GetKind(), o.GetNamespace(), o.GetName())

@@ -37,7 +37,10 @@ const (
 // TestRecipeConverges tests the whole path once: function-aicr resolves the
 // recipe from the OCI recipe source, Crossplane resolves the provider
 // schemas it requires, and provider-helm and provider-kubernetes accept what
-// it composes and bring it up.
+// it composes and bring it up. It starts without the namespaces the recipe
+// deploys to, which another feature may have left: e2e-second's pre-manifest
+// ConfigMap can only be created because function-aicr composes an Object for
+// its namespace ahead of it.
 func TestRecipeConverges(t *testing.T) {
 	const xr = "converge/xr.yaml"
 
@@ -47,9 +50,14 @@ func TestRecipeConverges(t *testing.T) {
 			WithLabel(LabelSize, LabelSizeLarge).
 			WithLabel(config.LabelTestSuite, config.TestSuiteDefault).
 			WithSetup("CreatePrerequisites", createPrerequisites()).
+			WithSetup("NamespacesDoNotExist", DeleteNamespaces(3*time.Minute, componentFirst, componentSecond)).
 			Assess("CreateXR", createXR(xr)).
 			Assess("XRIsReady",
 				funcs.ResourcesHaveConditionWithin(3*time.Minute, recipeManifests, xr, xpv2.Available(), xpv2.ReconcileSuccess())).
+			Assess("NamespaceIsCreatedAheadOfThePreManifest", funcs.AllOf(
+				funcs.ResourceHasConditionWithin(30*time.Second, object("e2e-second-pre-namespace-e2e-second"), xpv2.Available()),
+				funcs.ResourceHasConditionWithin(30*time.Second, object(objectSecondBefore), xpv2.Available()),
+			)).
 			Assess("ChartsAreInstalled", funcs.AllOf(
 				funcs.DeploymentBecomesAvailableWithin(1*time.Minute, componentFirst, componentFirst),
 				funcs.DeploymentBecomesAvailableWithin(1*time.Minute, componentSecond, componentSecond),
