@@ -49,6 +49,18 @@
     // Catch-all: every remaining Go module lands in one PR.
     { matchManagers: ['gomod'], groupName: 'go modules' },
 
+    // Non-major updates merge on their own once CI is green. Renovate merges a
+    // grouped PR only when every update in it is automergeable, so the list
+    // covers the digest and pin updates of the github-actions group too. The
+    // rules below opt out what needs a human: aicr and the approval-gated
+    // Kubernetes minors. Majors and the runtime image digest (dockerfile
+    // manager, built by no PR check) stay manual.
+    {
+      matchManagers: ['gomod', 'github-actions', 'crossplane', 'custom.regex'],
+      matchUpdateTypes: ['minor', 'patch', 'digest', 'pin', 'pinDigest'],
+      automerge: true,
+    },
+
     // Kubernetes staging modules and controller-tools move together. Their
     // minor version follows what crossplane-runtime / function-sdk-go pull in,
     // so only patches flow freely; minors and majors wait for approval on the
@@ -63,6 +75,7 @@
       matchPackageNames: ['k8s.io/**', 'sigs.k8s.io/controller-runtime', 'sigs.k8s.io/controller-tools'],
       matchUpdateTypes: ['major', 'minor'],
       dependencyDashboardApproval: true,
+      automerge: false,
     },
 
     // Crossplane SDK modules are released together and depend on each other.
@@ -82,6 +95,7 @@
       matchDepNames: ['github.com/NVIDIA/aicr'],
       groupName: 'aicr',
       dependencyDashboardApproval: true,
+      automerge: false,
     },
 
     // The go directive is the Go version CI builds and tests with (setup-go and
