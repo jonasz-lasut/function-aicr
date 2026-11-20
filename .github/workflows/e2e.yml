@@ -84,8 +84,9 @@ jobs:
           )
           echo "profiles=$(awk 'NF && !seen[$0]++' <<<"$selected" | jq -Rnc '[inputs]')" >> "$GITHUB_OUTPUT"
 
+  # No name of its own: GitHub appends the profile, as in `e2e (catalog)`, and
+  # a run that selects no profile shows one skipped `e2e`.
   e2e:
-    name: e2e (${{ matrix.profile }})
     needs: profiles
     if: needs.profiles.outputs.profiles != '[]'
     runs-on: ubuntu-26.04
