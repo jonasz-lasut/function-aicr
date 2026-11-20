@@ -19,14 +19,16 @@ order the function works. Each step links to the page that covers it.
    by name, and `componentClasses` removes whole classes. See
    [Components and overrides](authors/components.md).
 5. **Values and namespaces are settled.** Each component's values are
-   resolved and `nodeScheduling` is written into them. A component that
-   requires a node selector and has none is Fatal. `draEviction` is wired
-   when set, and a component that's already deployed keeps its namespace.
-   See [Node scheduling](operators/node-scheduling.md).
+   resolved and `nodeScheduling` is written into them. `draEviction` is
+   wired when set, and a component that's already deployed keeps its
+   namespace. See [Node scheduling](operators/node-scheduling.md).
 6. **The manifest files are rendered.** AICR's manifest files are Helm-style
    templates. The function renders them with the component's values and
    splits them into documents. A component whose manifests need its
    namespace before a chart creates it gets an `Object` for the namespace.
+   Then the function runs [AICR's bundle checks](operators/bundle-checks.md).
+   What AICR would refuse to bundle is Fatal for a component that isn't
+   deployed yet.
 7. **The provider schemas are required.** The function asks Crossplane for
    the `Release` schema when the recipe has a chart, and for the `Object`
    schema when a manifest rendered a document. Until Crossplane has resolved

@@ -33,6 +33,7 @@ import (
 	"aicr.run/pkg/upgrade"
 
 	"github.com/jonasz-lasut/function-aicr/input/v1beta1"
+	"github.com/jonasz-lasut/function-aicr/internal/checks"
 	"github.com/jonasz-lasut/function-aicr/internal/compose"
 	"github.com/jonasz-lasut/function-aicr/internal/schema"
 )
@@ -732,6 +733,23 @@ func TestRunFunction(t *testing.T) {
 				},
 			},
 		},
+		"FatalWhenAICRRefusesTheBundle": {
+			reason: "AICR's registry declares checks its bundler runs before it writes a bundle; the function runs the same checks, and one that AICR rates an error stops a component that is not deployed yet. On AKS the tuning manifest renders a toleration without a key unless nodeScheduling states one with a key.",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:     meta(),
+					Input:    yamlToProto("input/refused-by-aicr.yaml"),
+					Observed: &fnv1.State{Composite: fixture("observed/xr.yaml")},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta:    respMeta,
+					Results: fatal(`AICR's bundle check for "nodewright-customizations": [INVALID_REQUEST] nodewright-customizations renders a wildcard (keyless) accelerated-node toleration. AKS admission collapses a pod's tolerations to just the wildcard, which deadlocks nodewright packages that declare interrupts on first install (NVIDIA/nodewright#296). Pass keyed tolerations instead, e.g. nodeScheduling.accelerated.tolerations nvidia.com/gpu:NoSchedule.`),
+				},
+			},
+		},
 		"FatalWhenComponentClassUnknown": {
 			reason: "A misspelled class would filter out every component and report a recipe that deploys nothing as a success.",
 			args: args{
@@ -1084,11 +1102,150 @@ func TestNodeSchedulingAcrossTheCatalog(t *testing.T) {
 			}
 			s := &stack{managed: managed, values: values, dp: dp}
 			optedOut := s.applyNodeScheduling(placed, registry)
-			if err := s.requireNodeSelectors(registry, optedOut); err != nil {
-				t.Errorf("requireNodeSelectors(...) with both node selectors set: %v", err)
+			if findings := s.requireNodeSelectors(registry, optedOut); len(findings) > 0 {
+				t.Errorf("requireNodeSelectors(...) with both node selectors set: %v", findings)
 			}
 			if err := s.renderObjects(ctx); err != nil {
 				t.Errorf("renderObjects(...) with node scheduling applied: %v", err)
+			}
+		})
+	}
+}
+
+// TestBundleChecksAcrossTheCatalog guards how checks.Config describes a
+// request to AICR's bundle checks, on every leaf: a request that places both
+// kinds of workload, with tolerations that name a key, is one AICR's own
+// command line accepts for every stock recipe.
+func TestBundleChecksAcrossTheCatalog(t *testing.T) {
+	ctx := context.Background()
+	dp := embeddedDataProvider()
+	registry, err := recipe.GetComponentRegistryFor(dp)
+	if err != nil {
+		t.Fatalf("recipe.GetComponentRegistryFor(...): %v", err)
+	}
+	leaves, err := recipe.ResolveLeaves(ctx, recipe.ResolveLeavesOptions{Provider: dp, Version: testRecipeVersion})
+	if err != nil {
+		t.Fatalf("recipe.ResolveLeaves(...): %v", err)
+	}
+
+	placed := checks.Request{Scheduling: compose.NodeScheduling{
+		System: compose.NodePlacement{NodeSelector: map[string]string{"nodeGroup": "system-pool"}},
+		Accelerated: compose.NodePlacement{
+			NodeSelector: map[string]string{"nodeGroup": "gpu-pool"},
+			Tolerations:  []corev1.Toleration{{Key: "nvidia.com/gpu", Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoSchedule}},
+		},
+	}}
+
+	refusedUnplaced := 0
+	for _, leaf := range leaves {
+		if leaf.Err != nil {
+			continue // TestCatalogInvariants reports it.
+		}
+		managed := slices.Sorted(maps.Keys(managedComponents(&fnv1.RunFunctionResponse{}, leaf.Result, &v1beta1.Input{}, registry)))
+
+		if findings := checks.Run(ctx, leaf.Result, checks.Config(placed), registry, managed); len(findings) > 0 {
+			t.Errorf("%s: AICR's bundle checks report on a request that places both kinds of workload: %v", leaf.Entry.Name, findings)
+		}
+		for _, f := range checks.Run(ctx, leaf.Result, checks.Config(checks.Request{}), registry, managed) {
+			if f.Blocking {
+				refusedUnplaced++
+				break
+			}
+		}
+	}
+	if refusedUnplaced == 0 {
+		t.Error("no leaf is refused without node scheduling: either AICR dropped its AKS and OKE checks, or the checks no longer see what checks.Config tells them")
+	}
+}
+
+func TestRefuse(t *testing.T) {
+	const chart, manifestOnly = "gpu-operator", "nodewright-customizations"
+
+	observed := func(names ...string) map[resource.Name]resource.ObservedComposed {
+		out := make(map[resource.Name]resource.ObservedComposed, len(names))
+		for _, name := range names {
+			out[resource.Name(name)] = resource.ObservedComposed{Resource: composed.New()}
+		}
+		return out
+	}
+	warning := func(msg string) *fnv1.Result {
+		return &fnv1.Result{Severity: fnv1.Severity_SEVERITY_WARNING, Message: msg, Target: fnv1.Target_TARGET_COMPOSITE.Enum()}
+	}
+
+	type args struct {
+		findings []checks.Finding
+		observed map[resource.Name]resource.ObservedComposed
+	}
+	type want struct {
+		err     error
+		results []*fnv1.Result
+	}
+
+	cases := map[string]struct {
+		reason string
+		args   args
+		want   want
+	}{
+		"NoFindings": {
+			reason: "A request AICR has nothing to say about goes on.",
+		},
+		"NotBlocking": {
+			reason: "A finding AICR does not rate blocking is a warning.",
+			args:   args{findings: []checks.Finding{{Component: chart, Message: "consider this"}}},
+			want:   want{results: []*fnv1.Result{warning("consider this")}},
+		},
+		"BlockingOnFirstInstall": {
+			reason: "A blocking finding stops a component that is not deployed yet, as it stops AICR's bundler.",
+			args:   args{findings: []checks.Finding{{Component: chart, Message: "refused", Blocking: true}}},
+			want:   want{err: cmpopts.AnyError},
+		},
+		"BlockingOnADeployedChart": {
+			reason: "A component whose Release is observed was accepted before; refusing now would freeze its stack, so the finding is a warning.",
+			args: args{
+				findings: []checks.Finding{{Component: chart, Message: "refused", Blocking: true}},
+				observed: observed(chart),
+			},
+			want: want{results: []*fnv1.Result{warning(`refused; "gpu-operator" is already deployed, so it is not refused`)}},
+		},
+		"BlockingOnADeployedManifestOnlyComponent": {
+			reason: "A manifest-only component has no Release: it is deployed when one of its Objects is observed.",
+			args: args{
+				findings: []checks.Finding{{Component: manifestOnly, Message: "refused", Blocking: true}},
+				observed: observed("nodewright-customizations-post-nodewright-tuning"),
+			},
+			want: want{results: []*fnv1.Result{warning(`refused; "nodewright-customizations" is already deployed, so it is not refused`)}},
+		},
+		"OneNewComponentAmongDeployedOnes": {
+			reason: "The rule is per component: a finding on a new component stops the request, and the deployed one's is still reported.",
+			args: args{
+				findings: []checks.Finding{
+					{Component: chart, Message: "old", Blocking: true},
+					{Component: manifestOnly, Message: "new", Blocking: true},
+				},
+				observed: observed(chart),
+			},
+			want: want{
+				err:     cmpopts.AnyError,
+				results: []*fnv1.Result{warning(`old; "gpu-operator" is already deployed, so it is not refused`)},
+			},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			rsp := &fnv1.RunFunctionResponse{}
+			s := &stack{
+				observed: tc.args.observed,
+				objects:  manifestObjects{post: map[string][]string{manifestOnly: {"nodewright-customizations-post-nodewright-tuning"}}},
+			}
+
+			err := s.refuse(rsp, tc.args.findings)
+
+			if diff := cmp.Diff(tc.want.err, err, cmpopts.EquateErrors()); diff != "" {
+				t.Errorf("%s\nrefuse(...): -want err, +got err:\n%s", tc.reason, diff)
+			}
+			if diff := cmp.Diff(tc.want.results, rsp.GetResults(), protocmp.Transform(), cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("%s\nrefuse(...): -want results, +got results:\n%s", tc.reason, diff)
 			}
 		})
 	}
@@ -1122,7 +1279,7 @@ func TestRequireNodeSelectorsReadsTheOverride(t *testing.T) {
 		overrides map[string]*compose.Override
 	}
 	type want struct {
-		err error
+		refused bool
 	}
 
 	cases := map[string]struct {
@@ -1132,7 +1289,7 @@ func TestRequireNodeSelectorsReadsTheOverride(t *testing.T) {
 	}{
 		"NoSelector": {
 			reason: "Without nodeScheduling and without an override the component has no selector, and is refused.",
-			want:   want{err: cmpopts.AnyError},
+			want:   want{refused: true},
 		},
 		"SelectorFromTheOverride": {
 			reason: "An override places one component on its own, so a selector it sets satisfies the requirement.",
@@ -1141,7 +1298,7 @@ func TestRequireNodeSelectorsReadsTheOverride(t *testing.T) {
 		"OverrideWithoutSelector": {
 			reason: "An override of other values supplies no selector.",
 			args:   args{overrides: map[string]*compose.Override{name: {Values: map[string]any{"replicas": 1}}}},
-			want:   want{err: cmpopts.AnyError},
+			want:   want{refused: true},
 		},
 	}
 
@@ -1154,10 +1311,10 @@ func TestRequireNodeSelectorsReadsTheOverride(t *testing.T) {
 			}
 			optedOut := s.applyNodeScheduling(compose.NodeScheduling{}, registry)
 
-			err := s.requireNodeSelectors(registry, optedOut)
+			findings := s.requireNodeSelectors(registry, optedOut)
 
-			if diff := cmp.Diff(tc.want.err, err, cmpopts.EquateErrors()); diff != "" {
-				t.Errorf("%s\nrequireNodeSelectors(...): -want err, +got err:\n%s", tc.reason, diff)
+			if diff := cmp.Diff(tc.want.refused, len(findings) > 0); diff != "" {
+				t.Errorf("%s\nrequireNodeSelectors(...): -want refused, +got refused:\n%s\nfindings: %v", tc.reason, diff, findings)
 			}
 		})
 	}

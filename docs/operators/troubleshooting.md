@@ -68,6 +68,14 @@ fields the function sets.
 AICR's registry requires a node selector for the component, and its values
 have none. Set the selector the message names. See
 [Node scheduling](node-scheduling.md#components-that-require-a-node-selector).
+For a component that's already deployed the same message is a Warning.
+
+### `AICR's bundle check for "…"`
+
+AICR would refuse to build a bundle for this request, and the message is
+AICR's reason. It's Fatal for a component that isn't deployed yet and a
+Warning otherwise. See [AICR's bundle checks](bundle-checks.md) for what the
+checks read from the `Input`.
 
 ### `cannot resolve the node scheduling`
 

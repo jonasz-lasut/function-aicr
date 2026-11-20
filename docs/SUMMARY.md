@@ -23,6 +23,7 @@
 - [Schema validation](operators/schema-validation.md)
 - [Rollout order](operators/rollout-order.md)
 - [Node scheduling](operators/node-scheduling.md)
+- [AICR's bundle checks](operators/bundle-checks.md)
 - [DRA eviction](operators/dra-eviction.md)
 - [Upgrades](operators/upgrades.md)
 - [Troubleshooting](operators/troubleshooting.md)

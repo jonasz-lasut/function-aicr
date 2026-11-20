@@ -75,15 +75,15 @@ nodeScheduling:
 
 Give the accelerated workloads tolerations that name a key. On AKS a
 toleration without one deadlocks the first installation of NodeWright's
-packages. AICR's bundler refuses it there, a check the function doesn't
-run.
+packages, and [AICR's bundle checks](bundle-checks.md) refuse it there.
 
 ## Components that require a node selector
 
 A registry entry can require a node selector. AICR requires one where the
 wrong pool breaks the component without an error, as with a StatefulSet
 whose volume is in one zone. AICR's bundler refuses to build a bundle
-without the selector, and the function reports Fatal:
+without the selector, and the function reports Fatal for a component that
+isn't deployed yet:
 
 ```text
 component "slinky-slurm" requires nodeScheduling.system.nodeSelector: its values have no node selector at …
@@ -92,6 +92,12 @@ component "slinky-slurm" requires nodeScheduling.system.nodeSelector: its values
 In AICR v1.3.0 the entries of `slinky-slurm`, `slurm-accounting-mariadb` and
 `nvsentinel-mongodb` require one. Of the embedded recipes, that's the six
 Slurm recipes for AKS, EKS and GKE.
+
+A component that's already deployed isn't refused. The function raises a
+Warning for it and deploys it as before, because a selector added to a
+running StatefulSet can move it away from the zone of its volume. Give such
+a component its selector through `componentOverrides`, where it applies to
+that component alone.
 
 The check reads the values the component is deployed with, so a selector
 from `componentOverrides` satisfies it too. A recipe that sets the path to

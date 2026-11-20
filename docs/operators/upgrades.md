@@ -48,9 +48,12 @@ what replaced it.
 
 A field the `Input` doesn't have is now Fatal. It used to be ignored.
 
-A component whose registry entry requires a node selector is now refused
-without one, which affects the Slurm recipes for AKS, EKS and GKE. Set
-[`nodeScheduling`](node-scheduling.md).
+The function now refuses what AICR's bundler refuses. A new stack isn't
+deployed when a component requires a node selector it doesn't have, which
+affects the Slurm recipes for AKS, EKS and GKE, or when one of
+[AICR's bundle checks](bundle-checks.md) fails, which affects the AKS
+recipes and the OKE `gb300` recipe. Set [`nodeScheduling`](node-scheduling.md).
+A stack that's already deployed keeps running and gets a Warning for each.
 
 In the [status summary](../authors/summary.md), `componentCount` is now the
 number of components the recipe deploys. It used to equal the length of

@@ -52,12 +52,15 @@ Crossplane RunFunctionRequest
 │     (Warnings for skip/override names that match nothing)            │
 │  6. resolveValues: effective values per component                    │
 │     stack.applyNodeScheduling (nodeScheduling): selectors and        │
-│     tolerations at the registry's paths; requireNodeSelectors        │
+│     tolerations at the registry's paths                              │
 │     stack.wireDRAEviction (draEviction): the three-chart contract    │
 │     stack.keepNamespaces: a deployed Release keeps its namespace     │
 │  7. stack.renderObjects: per component, per wave (pre/post):         │
 │       manifest file → RenderManifest → SplitManifests →              │
 │       ManifestObjectName → NewObject → rendered                      │
+│     stack.requireNodeSelectors + checks.Run (AICR's bundle checks)   │
+│     → stack.refuse: Fatal for a component that is not deployed yet,  │
+│     Warning for one that is                                          │
 │  8. stack.needs → RequireSchema("release") / ("object") as needed    │
 │     composedKind.validator: not yet resolved → return with no        │
 │     resources; resolved to nil → Fatal "is provider-… installed?"    │
@@ -98,6 +101,8 @@ internal/compose/                 Builds the composed resources (map[string]any)
     ├── draeviction.go            WireDRAEviction: a copy of the bundler's eviction wiring
     └── object.go                 SplitManifests, ManifestObjectName, NewObject
     ↓
+internal/checks/                  Run AICR's registry-declared bundle checks (checks.Config, checks.Run)
+    ↓
 internal/schema/                  Validator: compile a required schema once, Validate many
     ↓
 aicr.run/pkg/recipe               Builder, DataProvider, RecipeResult, ComponentRef,
@@ -119,6 +124,7 @@ function-aicr/
 ├── internal/
 │   ├── resolve/             # Input overlay from the XR, criteria and provider config
 │   ├── compose/             # Release/Object builders, manifest rendering, value merging
+│   ├── checks/              # AICR's bundle checks, run with AICR's own functions
 │   └── schema/              # OpenAPI v3 validation of composed resources
 │
 ├── test-fixtures/
@@ -222,7 +228,15 @@ Names are pure functions of their inputs because the gate correlates observed ag
 
 `compose.ApplyNodeScheduling` is a copy of the orchestration AICR's bundler keeps unexported (`applyNodeSchedulingOverrides`, `classifySchedulingPaths` and `applyTolerationPaths` in `aicr.run/pkg/bundler/bundler.go`), built on the helpers `aicr.run/pkg/component` exports. The policy comes from the recipe's inline overrides only (`ComponentRef.Overrides`), never from the values file: an empty value at a path opts it out, a non-empty one makes tolerations append, everything else is replaced, and a toleration path listed for both tiers gets `component.SharedTolerations`. Two deliberate differences from the CLI: nothing is defaulted (the CLI tolerates every taint when its flags are unset, which here would reschedule every running stack on a function upgrade), and the bundler's other inputs to the same pass (workload selector, workload gate, node count, storage class) are not implemented.
 
-`stack.requireNodeSelectors` then runs `compose.RequireNodeSelectors` on the values with the override merged: a registry entry with `requireNodeSelector` and no selector at a non-opted-out path is Fatal, as `validateRequiredNodeSelectors` fails a bundle. In aicr v1.3.0 that is `slinky-slurm`, `slurm-accounting-mariadb` and `nvsentinel-mongodb`, and 6 of the 81 leaves (the Slurm recipes for AKS, EKS and GKE) fail without a selector. `TestNodeSchedulingAcrossTheCatalog` applies both tiers to every leaf, requires the check to pass and the manifests to render, and fails if a registry entry starts to use `requireNodeSelectorIfStorageClassSet`, the conditional variant that is not ported.
+`stack.requireNodeSelectors` then runs `compose.RequireNodeSelectors` on the values with the override merged: a registry entry with `requireNodeSelector` and no selector at a non-opted-out path is a blocking finding, as `validateRequiredNodeSelectors` fails a bundle. `stack.refuse` decides what a blocking finding does (see Bundle checks below). In aicr v1.3.0 that is `slinky-slurm`, `slurm-accounting-mariadb` and `nvsentinel-mongodb`, and 6 of the 81 leaves (the Slurm recipes for AKS, EKS and GKE) fail without a selector. `TestNodeSchedulingAcrossTheCatalog` applies both tiers to every leaf, requires the check to pass and the manifests to render, and fails if a registry entry starts to use `requireNodeSelectorIfStorageClassSet`, the conditional variant that is not ported.
+
+### Bundle checks
+
+AICR's registry declares `validations` per component (a function name, a severity, criteria conditions and a message), which the bundler runs before it writes a bundle. `internal/checks` runs them with AICR's own functions (`validations.RunValidations` from `aicr.run/pkg/bundler/validations`), so nothing is copied: `checks.Config` describes the request as the bundle configuration AICR's command line would build (`nodeScheduling` as the four scheduling options, `skipComponents` as `--set <component>:enabled=false`, `componentOverrides` values as typed overrides, `draEviction` as the eviction label), and `checks.Run` returns one `Finding` per result for the managed components, with the four scheduling flags in AICR's messages replaced by the Input fields. Nothing is defaulted in that configuration: the checks themselves know that an empty accelerated toleration list renders a wildcard.
+
+`stack.refuse` applies one rule to these findings and to the required node selectors: a blocking finding is Fatal for a component nothing of which is observed yet (`stack.isObserved`: its Release, or an Object of a manifest-only component), and a Warning ending in `is already deployed, so it is not refused` otherwise; a non-blocking finding is a Warning. A function or catalog upgrade therefore never freezes a running stack. It runs after `stack.renderObjects`, because a manifest-only component's Objects are what says it is deployed.
+
+A check's `conditions` also match a recipe that leaves the dimension unstated, so a recipe without a service is checked as if it could be any service. In aicr v1.3.0, with no `nodeScheduling`, five of the 81 leaves have a blocking finding: the four AKS recipes (`CheckWildcardAcceleratedToleration` on `nodewright-customizations`) and `gb300-oke-ubuntu-training` (`CheckAcceleratedSelectorMissing`). `TestBundleChecksAcrossTheCatalog` requires every leaf to be clean when both placements are stated with keyed tolerations, and at least one leaf to be refused without them, which is what fails if AICR changes how its checks read the configuration. AICR's checks log through `log/slog`; `main.go` raises that logger to error level unless `--debug` is set. `aicr.run/pkg/bundler/validations` is not a stable API.
 
 ### DRA eviction
 
@@ -297,7 +311,7 @@ go test -race ./...
 
 `test/e2e` runs the function as a control plane does: built from the tree, installed as a Function package in a kind cluster (`function-aicr-e2e-<profile>`, with a kubeconfig of its own at `_output/e2e/kubeconfig-<profile>` that the Makefile exports as `KUBECONFIG`, so no target and no feature can reach another cluster through the developer's current context) with Crossplane, provider-helm and provider-kubernetes (a `ClusterProviderConfig` named `e2e` on each, pointing at the kind cluster itself), function-auto-ready and an OCI registry at `registry.e2e.svc:5443`. `test/e2e/README.md` is the reference.
 
-The suite deploys a catalog of its own, `test/e2e/catalog`: one chart that starts a pause container (`charts/e2e-app`) and a recipe tree (`recipe/`) with three components, `e2e-first` (a chart), `e2e-second` (a chart that depends on it, with a pre-manifest and a post-manifest file) and `e2e-notes` (manifest-only, depends on `e2e-second`). `make e2e.catalog` pushes both to the registry and applies the function's runtime config with the recipe artifact's digest, so the function serves the catalog through `--recipe-oci-*`, the same path an operator's catalog takes. AICR layers it over the embedded catalog, so `recipe/overlays` replaces the stock `base`, `kind` and `monitoring-hpa` overlays, which the suite's criteria (`service: kind`, and with `intent: training` a recipe that moves `e2e-first` to another namespace) would otherwise also select. `TestEndToEndCatalog` (`e2e_catalog_test.go`, a unit test) resolves both recipes through a layered provider and fails when an AICR bump adds a stock overlay that joins them: replace that overlay in the catalog too.
+The suite deploys a catalog of its own, `test/e2e/catalog`: one chart that starts a pause container (`charts/e2e-app`) and a recipe tree (`recipe/`) with three components, `e2e-first` (a chart), `e2e-second` (a chart that depends on it, with a pre-manifest and a post-manifest file) and `e2e-notes` (manifest-only, depends on `e2e-second`). `make e2e.catalog` pushes both to the registry and applies the function's runtime config with the recipe artifact's digest, so the function serves the catalog through `--recipe-oci-*`, the same path an operator's catalog takes. AICR layers it over the embedded catalog, so `recipe/overlays` replaces the stock `base`, `kind`, `kind-inference` and `monitoring-hpa` overlays, which the suite's criteria (`service: kind`; with `intent: training` a recipe that moves `e2e-first` to another namespace; with `intent: inference` a recipe that adds `e2e-checked`, whose registry entry declares AICR's `CheckAcceleratedSelectorMissing`) would otherwise also select. The check is on a component of its own and has no conditions: AICR applies a condition on a criteria dimension to every recipe that leaves the dimension unstated (`recipe.MatchesCriteriaField`), so a check conditioned on `intent` would also refuse the plain `service: kind` recipe. `TestEndToEndCatalog` (`e2e_catalog_test.go`, a unit test) resolves the three recipes through a layered provider and fails when an AICR bump adds a stock overlay that joins them: replace that overlay in the catalog too.
 
 ```bash
 git submodule update --init   # crossplane/build, once
@@ -403,10 +417,11 @@ The `aicr.run` version is the recipe catalog version (AICR renamed its Go module
 2. `go test ./...` — `TestRunFunction` fails wherever recipe content changed; `TestCatalogInvariants` fails, naming the leaf and component, wherever a recipe's *shape* broke an assumption (a manifest that no longer renders, a name collision, a dependency edge into a component the gate cannot see)
 3. `go generate ./...` and **review the diff under `test-fixtures/want/`** — it is exactly what the function will now deploy. Commit it with the bump.
 4. Re-render the examples (`example/clusterstack/README.md`) for both XRs
-5. Re-read the bundler's node scheduling pass: `applyNodeSchedulingOverrides`, `classifySchedulingPaths`, `applyTolerationPaths` and `validateRequiredNodeSelectors` in `aicr.run/pkg/bundler/bundler.go`, of which `compose.ApplyNodeScheduling` and `compose.RequireNodeSelectors` are hand copies. `TestNodeSchedulingAcrossTheCatalog` catches a registry entry that needs the unported storage class condition; a changed rule only shows in the source
-6. Re-read the bundler's DRA eviction wiring: `injectDRAEvictionLabel` and its two helpers in `aicr.run/pkg/bundler/bundler.go`, plus `draNodeLabelerDropReason` for when the labeler applies. `compose.WireDRAEviction` is a hand copy of that logic. `TestDRAEvictionConstants` catches a renamed constant or a moved value path; a change in behaviour (a new component in the contract, a new condition, a different merge rule) only shows in the source, so diff those functions against the previous AICR version and port what changed
-7. Label the bump's pull request `e2e:kwok`: the kwok profile deploys a stock recipe from the new catalog. Compare `kwok/scripts/validate-scheduling.sh` with the Composition under `test/e2e/manifests/kwok/setup` when it fails: AICR adds a chart override there when a component stops coming up on simulated nodes. The nodes in `test/e2e/manifests/kwok/nodes.yaml` do not follow the module; re-render them if AICR's EKS node profiles change in a way the recipe depends on
-8. Fix behaviour changes by hand: the static parts of each response are asserted in code, not regenerated. A component the catalog adds joins every `TestRunFunction` fixture that does not list it under `skipComponents`; add it there to keep the pinned tier small
+5. Run `TestBundleChecksAcrossTheCatalog` and `internal/checks`' tests with attention: they call `aicr.run/pkg/bundler/validations` and `aicr.run/pkg/bundler/config` directly, neither of which is a stable API, and a new check may read a bundle option `checks.Config` does not set yet
+6. Re-read the bundler's node scheduling pass: `applyNodeSchedulingOverrides`, `classifySchedulingPaths`, `applyTolerationPaths` and `validateRequiredNodeSelectors` in `aicr.run/pkg/bundler/bundler.go`, of which `compose.ApplyNodeScheduling` and `compose.RequireNodeSelectors` are hand copies. `TestNodeSchedulingAcrossTheCatalog` catches a registry entry that needs the unported storage class condition; a changed rule only shows in the source
+7. Re-read the bundler's DRA eviction wiring: `injectDRAEvictionLabel` and its two helpers in `aicr.run/pkg/bundler/bundler.go`, plus `draNodeLabelerDropReason` for when the labeler applies. `compose.WireDRAEviction` is a hand copy of that logic. `TestDRAEvictionConstants` catches a renamed constant or a moved value path; a change in behaviour (a new component in the contract, a new condition, a different merge rule) only shows in the source, so diff those functions against the previous AICR version and port what changed
+8. Label the bump's pull request `e2e:kwok`: the kwok profile deploys a stock recipe from the new catalog. Compare `kwok/scripts/validate-scheduling.sh` with the Composition under `test/e2e/manifests/kwok/setup` when it fails: AICR adds a chart override there when a component stops coming up on simulated nodes. The nodes in `test/e2e/manifests/kwok/nodes.yaml` do not follow the module; re-render them if AICR's EKS node profiles change in a way the recipe depends on
+9. Fix behaviour changes by hand: the static parts of each response are asserted in code, not regenerated. A component the catalog adds joins every `TestRunFunction` fixture that does not list it under `skipComponents`; add it there to keep the pinned tier small
 
 Since aicr v0.19.0 the resolver enforces a coverage post-condition: every stated dimension must be honored by an applied overlay. Do not reintroduce client-side defaults (e.g. `os: ubuntu`) or cross-field rules — leave unresolved dimensions unstated and let AICR answer.
 
