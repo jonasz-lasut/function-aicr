@@ -1,0 +1,28 @@
+# function-aicr with the suite's provider configs, followed by
+# function-auto-ready as in any pipeline that uses it.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: stacks.e2e.aicr.example.org
+spec:
+  compositeTypeRef:
+    apiVersion: e2e.aicr.example.org/v1alpha1
+    kind: Stack
+  mode: Pipeline
+  pipeline:
+  - step: aicr
+    functionRef:
+      name: function-aicr
+    input:
+      apiVersion: aicr.fn.crossplane.io/v1beta1
+      kind: Input
+      overlayFrom:
+        fieldPath: spec.aicr
+      providerConfigRef:
+        kind: ClusterProviderConfig
+        name: e2e
+      target:
+        fieldPath: status.aicr
+  - step: auto-ready
+    functionRef:
+      name: function-auto-ready
