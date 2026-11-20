@@ -51,6 +51,7 @@ Crossplane RunFunctionRequest
 │  5. managedComponents: enabled, not skipped, Helm-typed refs         │
 │     (Warnings for skip/override names that match nothing)            │
 │  6. resolveValues: effective values per component                    │
+│     stack.keepNamespaces: a deployed Release keeps its namespace     │
 │  7. stack.renderObjects: per component, per wave (pre/post):         │
 │       manifest file → RenderManifest → SplitManifests →              │
 │       ManifestObjectName → NewObject → rendered                      │
@@ -195,6 +196,10 @@ Composed resources are `map[string]any` (see Design Decisions), built in `intern
 - **Object** (`kubernetes.m.crossplane.io/v1alpha1`) — one per document of every `preManifestFiles` (wave `pre`) and `manifestFiles` (wave `post`) entry, named `ManifestObjectName(component, wave, doc, index)` = `<component>-<pre|post>-<kind>-<slugged name>` (or `<component>-<wave>-<index>` when a document has no kind/name). Manifest files are Go/Helm templates rendered with `aicr/pkg/manifest.Render` from the same effective namespace/chart/version/values as the Release, so an override cannot make them disagree.
 
 Names are pure functions of their inputs because the gate correlates observed against desired resources by name. This also means one composite per target namespace: two would claim the same names.
+
+### Sticky namespaces
+
+`stack.keepNamespaces` runs before the manifests are rendered. A chart-backed component whose observed Release has a `spec.forProvider.namespace` other than the recipe's keeps the observed one (it is written into the component's `compose.Override`, so the Release and the manifests agree) and a Warning names both namespaces. An explicit `componentOverrides.<component>.namespace` wins and is how a component is moved. A manifest-only component has no Release: it follows a dependency whose namespace was kept when the recipe places both in the same namespace, so a CR stays next to its operator. aicr v1.3.0 moved `nodewright-operator` from `skyhook` to `nodewright`; `KeepsTheNamespaceOfADeployedRelease` pins that case.
 
 ### The gate
 
@@ -391,6 +396,10 @@ AICR's catalog decides which combinations exist. Unstated dimensions select the 
 ### Manifest Files Are Rendered With AICR's Renderer
 
 30 of the 36 manifest files in the v0.19.0 catalog are Go/Helm templates. Skipping files that contain `{{` would silently drop most recipe content, so they are rendered with `aicr/pkg/manifest.Render` exactly as AICR's bundler does; a render or parse failure is Fatal.
+
+### A Deployed Release Is Never Relocated
+
+A Helm release cannot be moved between namespaces, so when an AICR bump changes a component's default namespace the function keeps the namespace the observed Release has, rather than emitting the new one. This is the one place observed state shapes a composed resource instead of only gating it. It is safe against the pipeline-order problem the gate has, because the value is read from the observed Release's spec, which is what the function itself last emitted, not from a status another function sets. AICR solves the same problem for its bundles with `aicr recipe --inherit-from <previous> --inherit=namespace`.
 
 ### Deterministic Names, One Composite per Namespace
 

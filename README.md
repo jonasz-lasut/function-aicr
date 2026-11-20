@@ -272,6 +272,15 @@ and values (so an override shapes the manifests exactly as it shapes the
 `<component>-<pre|post>-<kind>-<name>`. A file that fails to render or parse
 is Fatal — a recipe is never deployed with a piece silently missing.
 
+A component that is already deployed keeps its namespace. When the recipe
+names another one, as after an AICR release that moves a component's default
+namespace, the function doesn't relocate the live `Release`: it keeps the
+namespace the observed `Release` has and reports it as a Warning. A
+manifest-only component that the recipe places in the namespace of a component
+it depends on follows that component, so a custom resource stays next to its
+operator. To move a component deliberately, set
+`componentOverrides.<component>.namespace`, which always wins.
+
 Composed resource names are deterministic because the dependency gate
 correlates observed against desired resources by them. The consequence is one
 composite resource per target cluster and namespace — which matches the
@@ -377,7 +386,7 @@ The function's input is a KRM-like object of `kind: Input`,
 | `skipComponents` | `[]ComponentRef`, optional | `[]` | Components excluded from the resolved recipe. Each entry is `{name: string}` (`name` required). An entry naming no component of the resolved recipe raises a Warning result — a typo would otherwise silently deploy the component. |
 | `componentOverrides` | `map[string]ComponentOverride`, optional | `{}` | Keyed by component name. An entry for anything not managed — misspelled, skipped, left out by `componentClasses`, or disabled by the recipe — is ignored with a Warning result. |
 | `componentOverrides[name].version` | string, optional | `""` (recipe's version) | Overrides the component's chart version. |
-| `componentOverrides[name].namespace` | string, optional | `""` (recipe's namespace) | Overrides the component's target namespace. |
+| `componentOverrides[name].namespace` | string, optional | `""` (recipe's namespace, or the one the component is already deployed in) | Overrides the component's target namespace. It is also how a deployed component is moved to the namespace a newer recipe names. |
 | `componentOverrides[name].values` | object, optional | unset | Deep-merged over the values the recipe resolved; override wins on conflict. Must be an object — any other JSON kind is Fatal on the first reconcile, before any provider schema is requested. |
 | `target` | object (`Target`), optional | unset | Where the resolved-recipe summary is written on the desired composite resource. When unset, no status is written. |
 | `target.fieldPath` | string, **required if `target` set** | — | Must be `"status"` or begin with `"status."`. Names the object that receives the summary keys; sibling keys already there are preserved. |

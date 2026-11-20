@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	sigsyaml "sigs.k8s.io/yaml"
 
+	"github.com/crossplane/crossplane-runtime/v2/pkg/fieldpath"
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	"github.com/crossplane/function-sdk-go/logging"
 	fnv1 "github.com/crossplane/function-sdk-go/proto/v1"
@@ -386,6 +387,39 @@ func TestRunFunction(t *testing.T) {
 					Conditions:   []*fnv1.Condition{functionSuccess()},
 				},
 				golden: golden{resources: "component-classes"},
+			},
+		},
+		"KeepsTheNamespaceOfADeployedRelease": {
+			reason: "The recipe now places nodewright-operator in the nodewright namespace, but its Release is observed in skyhook: a live Helm release is never relocated, the manifest-only nodewright-customizations follows the operator it depends on, and the kept namespace is reported.",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:  meta(),
+					Input: yamlToProto("input/render-manifests.yaml"),
+					Observed: &fnv1.State{
+						Composite: fixture("observed/xr.yaml"),
+						Resources: map[string]*fnv1.Resource{
+							"nodewright-operator": fixture("observed/nodewright-operator-in-skyhook.yaml"),
+						},
+					},
+					RequiredSchemas: map[string]*fnv1.Schema{
+						"release": permissiveSchema(),
+						"object":  permissiveSchema(),
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta:         respMeta,
+					Requirements: releaseAndObjectRequirements(),
+					Results: []*fnv1.Result{{
+						Severity: fnv1.Severity_SEVERITY_WARNING,
+						Message:  `"nodewright-operator" stays in namespace "skyhook", where it is deployed, although the recipe places it in "nodewright"; set componentOverrides["nodewright-operator"].namespace to "nodewright" to move it`,
+						Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
+					}},
+					Conditions: []*fnv1.Condition{functionSuccess()},
+				},
+				golden: golden{resources: "keep-namespace"},
 			},
 		},
 		"WritesSummaryToTarget": {
@@ -1192,6 +1226,111 @@ func TestGate(t *testing.T) {
 // TestManagedComponents exercises managedComponents directly: the embedded
 // "kind" recipe used by TestRunFunction has no disabled or non-Helm component,
 // and its skip lists name only real components.
+func TestKeepNamespaces(t *testing.T) {
+	const operator, customizations, other = "nodewright-operator", "nodewright-customizations", "cert-manager"
+
+	managed := map[string]*recipe.ComponentRef{
+		operator: {Name: operator, Type: recipe.ComponentTypeHelm, Namespace: "nodewright", Source: "oci://ghcr.io/nvidia/nodewright/charts", Chart: "nodewright"},
+		// Manifest-only, in the namespace of the operator it depends on.
+		customizations: {Name: customizations, Type: recipe.ComponentTypeHelm, Namespace: "nodewright", DependencyRefs: []string{operator}, ManifestFiles: []string{"tuning.yaml"}},
+		other:          {Name: other, Type: recipe.ComponentTypeHelm, Namespace: "cert-manager", Source: "https://charts.jetstack.io", Chart: "cert-manager"},
+	}
+	observedIn := func(namespaces map[string]string) map[resource.Name]resource.ObservedComposed {
+		observed := make(map[resource.Name]resource.ObservedComposed, len(namespaces))
+		for name, ns := range namespaces {
+			cd := composed.New()
+			cd.SetName(name)
+			if err := fieldpath.Pave(cd.Object).SetString("spec.forProvider.namespace", ns); err != nil {
+				t.Fatalf("SetString(...): %v", err)
+			}
+			observed[resource.Name(name)] = resource.ObservedComposed{Resource: cd}
+		}
+		return observed
+	}
+	kept := func(name, observed, wanted string) *fnv1.Result {
+		return &fnv1.Result{
+			Severity: fnv1.Severity_SEVERITY_WARNING,
+			Message:  fmt.Sprintf("%q stays in namespace %q, where it is deployed, although the recipe places it in %q; set componentOverrides[%q].namespace to %q to move it", name, observed, wanted, name, wanted),
+			Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
+		}
+	}
+
+	type args struct {
+		overrides map[string]*compose.Override
+		observed  map[resource.Name]resource.ObservedComposed
+	}
+	type want struct {
+		namespaces map[string]string
+		results    []*fnv1.Result
+	}
+
+	cases := map[string]struct {
+		reason string
+		args   args
+		want   want
+	}{
+		"NothingObserved": {
+			reason: "A component that is not deployed yet goes where the recipe places it.",
+			args:   args{},
+			want:   want{namespaces: map[string]string{}},
+		},
+		"ObservedWhereTheRecipePlacesIt": {
+			reason: "A Release already in the recipe's namespace needs nothing kept.",
+			args:   args{observed: observedIn(map[string]string{operator: "nodewright", other: "cert-manager"})},
+			want:   want{namespaces: map[string]string{}},
+		},
+		"KeepsTheObservedNamespace": {
+			reason: "A deployed Release keeps its namespace when the recipe moves the component, and the manifest-only component that shares the namespace of that dependency follows it; unrelated components are untouched.",
+			args:   args{observed: observedIn(map[string]string{operator: "skyhook", other: "cert-manager"})},
+			want: want{
+				namespaces: map[string]string{operator: "skyhook", customizations: "skyhook"},
+				results:    []*fnv1.Result{kept(operator, "skyhook", "nodewright")},
+			},
+		},
+		"ExplicitOverrideWins": {
+			reason: "componentOverrides namespace is how a component is moved deliberately: it wins over the observed namespace, and nothing is kept or reported.",
+			args: args{
+				overrides: map[string]*compose.Override{operator: {Namespace: "nodewright"}},
+				observed:  observedIn(map[string]string{operator: "skyhook"}),
+			},
+			want: want{namespaces: map[string]string{operator: "nodewright"}},
+		},
+		"ManifestOnlyOverrideWins": {
+			reason: "A manifest-only component with its own override does not follow its dependency.",
+			args: args{
+				overrides: map[string]*compose.Override{customizations: {Namespace: "tuning"}},
+				observed:  observedIn(map[string]string{operator: "skyhook"}),
+			},
+			want: want{
+				namespaces: map[string]string{operator: "skyhook", customizations: "tuning"},
+				results:    []*fnv1.Result{kept(operator, "skyhook", "nodewright")},
+			},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			rsp := &fnv1.RunFunctionResponse{}
+			s := &stack{managed: managed, overrides: tc.args.overrides, observed: tc.args.observed}
+
+			s.keepNamespaces(rsp)
+
+			got := make(map[string]string)
+			for name, o := range s.overrides {
+				if o.Namespace != "" {
+					got[name] = o.Namespace
+				}
+			}
+			if diff := cmp.Diff(tc.want.namespaces, got); diff != "" {
+				t.Errorf("%s\nkeepNamespaces(...): -want namespaces, +got namespaces:\n%s", tc.reason, diff)
+			}
+			if diff := cmp.Diff(tc.want.results, rsp.GetResults(), protocmp.Transform()); diff != "" {
+				t.Errorf("%s\nkeepNamespaces(...): -want results, +got results:\n%s", tc.reason, diff)
+			}
+		})
+	}
+}
+
 func TestManagedComponents(t *testing.T) {
 	warning := func(format string, a ...any) *fnv1.Result {
 		return &fnv1.Result{

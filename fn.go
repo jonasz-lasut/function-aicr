@@ -174,6 +174,11 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 		dp:           f.dp,
 		recipeSource: f.recipeSource,
 	}
+	if s.observed, err = request.GetObservedComposedResources(req); err != nil {
+		response.Fatal(rsp, errors.Wrapf(err, "cannot get observed composed resources from %T", req))
+		return rsp, nil
+	}
+	s.keepNamespaces(rsp)
 	if err := s.renderObjects(ctx); err != nil {
 		response.Fatal(rsp, err)
 		return rsp, nil
@@ -208,10 +213,6 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 
 	if s.desired, err = request.GetDesiredComposedResources(req); err != nil {
 		response.Fatal(rsp, errors.Wrapf(err, "cannot get desired composed resources from %T", req))
-		return rsp, nil
-	}
-	if s.observed, err = request.GetObservedComposedResources(req); err != nil {
-		response.Fatal(rsp, errors.Wrapf(err, "cannot get observed composed resources from %T", req))
 		return rsp, nil
 	}
 	if err := s.composeReleases(); err != nil {
@@ -267,6 +268,87 @@ type stack struct {
 	// its pre-manifest and post-manifest files. The gate correlates observed
 	// against desired resources by these names.
 	objects manifestObjects
+}
+
+// keepNamespaces makes a component that is already deployed keep the
+// namespace it is deployed in when the recipe names another, as after an AICR
+// bump that moves a component's default namespace. A Helm release cannot be
+// moved: emitting the new namespace would at best install a second copy and
+// leave the first behind, so the function never relocates a live Release on
+// its own. An explicit componentOverrides namespace wins, which is how a
+// component is moved deliberately. Each kept namespace is reported as a
+// warning, so the divergence from the recipe stays visible.
+//
+// A manifest-only component has no Release to read a namespace from. One that
+// the recipe places in the namespace of a component it depends on follows
+// that component, so a custom resource stays next to the operator that
+// reconciles it.
+//
+// This is the one place observed state shapes a composed resource rather than
+// only gating it; the namespace is read from the observed Release's spec,
+// which is what the function itself last emitted.
+func (s *stack) keepNamespaces(rsp *fnv1.RunFunctionResponse) {
+	kept := make(map[string]string)
+	for _, name := range slices.Sorted(maps.Keys(s.managed)) {
+		c := s.managed[name]
+		if c.IsManifestOnlyHelm() || s.overrideNamespace(name) != "" {
+			continue
+		}
+		observed := s.observedNamespace(name)
+		if observed == "" || observed == c.Namespace {
+			continue
+		}
+		s.override(name).Namespace = observed
+		kept[name] = observed
+		response.Warning(rsp, errors.Errorf("%q stays in namespace %q, where it is deployed, although the recipe places it in %q; set componentOverrides[%q].namespace to %q to move it", name, observed, c.Namespace, name, c.Namespace))
+	}
+	for _, name := range slices.Sorted(maps.Keys(s.managed)) {
+		c := s.managed[name]
+		if !c.IsManifestOnlyHelm() || s.overrideNamespace(name) != "" {
+			continue
+		}
+		for _, dep := range c.DependencyRefs {
+			if ns, ok := kept[dep]; ok && s.managed[dep].Namespace == c.Namespace {
+				s.override(name).Namespace = ns
+				break
+			}
+		}
+	}
+}
+
+// observedNamespace returns the namespace of a component's observed Release,
+// or "" when the Release is not observed.
+func (s *stack) observedNamespace(name string) string {
+	oc, ok := s.observed[resource.Name(name)]
+	if !ok {
+		return ""
+	}
+	ns, err := fieldpath.Pave(oc.Resource.Object).GetString("spec.forProvider.namespace")
+	if err != nil {
+		return ""
+	}
+	return ns
+}
+
+// overrideNamespace returns the namespace an override gives a component, or "".
+func (s *stack) overrideNamespace(name string) string {
+	if o := s.overrides[name]; o != nil {
+		return o.Namespace
+	}
+	return ""
+}
+
+// override returns the override of a component, creating an empty one.
+func (s *stack) override(name string) *compose.Override {
+	if s.overrides == nil {
+		s.overrides = make(map[string]*compose.Override)
+	}
+	o := s.overrides[name]
+	if o == nil {
+		o = &compose.Override{}
+		s.overrides[name] = o
+	}
+	return o
 }
 
 // resolveValues resolves the values every managed component deploys with; its
