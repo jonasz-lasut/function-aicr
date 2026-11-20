@@ -1,0 +1,56 @@
+# The suite's OCI registry: plain registry behind the TLS certificate
+# `make e2e.certs` issues for registry.e2e.svc. The function trusts its CA
+# through SSL_CERT_FILE (function-runtime.yaml). REGISTRY_VERSION is
+# substituted by `make e2e.setup`.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: registry
+  namespace: e2e
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: registry
+  template:
+    metadata:
+      labels:
+        app: registry
+    spec:
+      containers:
+      - name: registry
+        image: registry:REGISTRY_VERSION
+        env:
+        - name: REGISTRY_HTTP_ADDR
+          value: 0.0.0.0:5443
+        - name: REGISTRY_HTTP_TLS_CERTIFICATE
+          value: /certs/tls.crt
+        - name: REGISTRY_HTTP_TLS_KEY
+          value: /certs/tls.key
+        ports:
+        - name: https
+          containerPort: 5443
+        readinessProbe:
+          tcpSocket:
+            port: https
+        volumeMounts:
+        - name: tls
+          mountPath: /certs
+          readOnly: true
+      volumes:
+      - name: tls
+        secret:
+          secretName: registry-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: registry
+  namespace: e2e
+spec:
+  selector:
+    app: registry
+  ports:
+  - name: https
+    port: 5443
+    targetPort: https

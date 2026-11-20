@@ -1,0 +1,17 @@
+# The target cluster of the suite is the kind cluster itself: both providers
+# use their own service account. The suite's Inputs name this config.
+apiVersion: helm.m.crossplane.io/v1beta1
+kind: ClusterProviderConfig
+metadata:
+  name: e2e
+spec:
+  credentials:
+    source: InjectedIdentity
+---
+apiVersion: kubernetes.m.crossplane.io/v1alpha1
+kind: ClusterProviderConfig
+metadata:
+  name: e2e
+spec:
+  credentials:
+    source: InjectedIdentity

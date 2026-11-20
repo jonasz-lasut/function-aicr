@@ -16,6 +16,8 @@ the tests.
 | `internal/schema/` | OpenAPI v3 validation of composed resources. |
 | `test-fixtures/` | The requests `TestRunFunction` sends and the goldens it compares against. |
 | `example/clusterstack/` | The XRD, Composition and composite resources of the render walkthrough. |
+| `test/e2e/` | The end-to-end suite, a Go module of its own. |
+| `Makefile`, `build/` | The end-to-end cluster and the Crossplane make library it uses. |
 | `docs/` | This site. |
 
 `fn.go` and `main.go` live in `package main`, the layout of Crossplane's

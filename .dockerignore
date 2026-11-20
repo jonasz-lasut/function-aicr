@@ -1,0 +1,6 @@
+# Kept out of the image build context: the build submodule's tool cache and
+# output, and the documentation site's output and style packages.
+.cache
+_output
+book
+.vale

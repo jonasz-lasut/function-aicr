@@ -14,7 +14,7 @@
   // (workflows read it), so the golang build stage floats on golang:1 by
   // design; the runtime base (gcr.io/distroless/static-debian13:nonroot) is
   // digest-pinned and the dockerfile manager keeps that digest current.
-  enabledManagers: ['gomod', 'github-actions', 'crossplane', 'dockerfile', 'custom.regex'],
+  enabledManagers: ['gomod', 'github-actions', 'crossplane', 'dockerfile', 'git-submodules', 'custom.regex'],
   // CI's check-diff runs `go mod tidy` and fails on a dirty tree, so tidy in
   // the same commit; update import paths on /vN major bumps.
   postUpdateOptions: ['gomodTidy', 'gomodUpdateImportPaths'],
@@ -43,6 +43,18 @@
       depNameTemplate: 'errata-ai/vale',
       datasourceTemplate: 'github-releases',
       extractVersionTemplate: '^v(?<version>.*)$',
+    },
+    {
+      // What the end-to-end cluster installs: the Makefile's pins, each under
+      // a `# renovate: datasource=... depName=...` comment. An optional
+      // extractVersion strips the `v` where the pin is a chart version.
+      customType: 'regex',
+      description: 'pins under a renovate comment in the Makefile',
+      managerFilePatterns: ['/^Makefile$/'],
+      matchStrings: [
+        '# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)( extractVersion=(?<extractVersion>\\S+))?\\n[A-Z_]+ \\?= (?<currentValue>\\S+)',
+      ],
+      extractVersionTemplate: '{{#if extractVersion}}{{{extractVersion}}}{{/if}}',
     },
     {
       // Crossplane CLI version installed by install.sh in the release workflows.
@@ -129,6 +141,17 @@
       matchUpdateTypes: ['minor', 'patch', 'digest', 'pin', 'pinDigest'],
       groupName: 'github-actions',
     },
+
+    // The end-to-end suite: the cluster's pins in the Makefile, the suite's
+    // own Go module and the build submodule. The suite runs on demand, not on
+    // every pull request, so nothing here merges on its own: label the PR
+    // `e2e` and merge it once the suite is green.
+    {
+      matchFileNames: ['Makefile', 'test/e2e/**'],
+      groupName: 'e2e',
+      automerge: false,
+    },
+    { matchManagers: ['git-submodules'], groupName: 'build submodule', automerge: false },
 
     // Package refs in the render example.
     { matchManagers: ['crossplane'], groupName: 'examples' },

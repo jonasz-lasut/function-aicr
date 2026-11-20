@@ -19,7 +19,8 @@ go test -race ./...      # with the race detector
 
 They all run without a cluster. `crossplane render` on the
 [example](../authors/render-locally.md) is part of the development loop, not
-a suite.
+a suite. The [end-to-end suite](#the-end-to-end-suite) is the one tier that
+needs a cluster, and it's a separate Go module.
 
 ## The request suite and its goldens
 
@@ -63,9 +64,36 @@ It resolves the leaf recipes of the catalog with AICR's
 When it fails after an AICR bump, a recipe's shape broke an assumption. Fix
 the function, not the test.
 
+## The end-to-end suite
+
+`test/e2e` runs the function the way a control plane does. `make e2e.up`
+builds it from the tree and installs it as a Function package in a kind
+cluster, next to Crossplane, provider-helm, provider-kubernetes,
+`function-auto-ready` and an OCI registry. The providers compose into the
+kind cluster itself.
+
+```shell
+git submodule update --init   # the Crossplane build submodule, once
+make e2e.up
+make e2e.test
+make e2e.function             # after a code change
+make e2e.down
+```
+
+The suite follows the one in `crossplane/crossplane`. Features are built with
+`sigs.k8s.io/e2e-framework` and Crossplane's e2e helpers, and each keeps its
+manifests in a directory under `test/e2e/manifests/`. It's a Go module of its
+own, so `go test ./...` at the root doesn't build it.
+
+CI runs it on demand: from the Actions tab, or on a pull request with the
+`e2e` label. [`test/e2e/README.md`][e2e-readme] describes the cluster and
+how to add a feature.
+
 ## Conventions
 
 Tests are tables: a `map[string]struct` keyed by case name, with `reason`,
 `args` and `want`. Results are compared with `cmp.Diff`, and a `RunFunction`
 case compares the whole response. `testify`, `gomock` and similar packages
 aren't used.
+
+[e2e-readme]: https://github.com/jonasz-lasut/function-aicr/blob/main/test/e2e/README.md

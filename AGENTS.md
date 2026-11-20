@@ -127,13 +127,16 @@ function-aicr/
 ├── package/
 │   ├── crossplane.yaml      # Function package metadata
 │   └── input/               # GENERATED Input CRD
+├── test/e2e/                # End-to-end suite: its own Go module, on crossplane/crossplane's e2e framework
+├── Makefile                 # The end-to-end cluster (make e2e.up / e2e.test / e2e.down), nothing else
+├── build/                   # Submodule: crossplane/build, the Makefile's make library
 ├── docs/                    # The documentation site's pages (mdBook; SUMMARY.md is the table of contents)
 ├── book.toml                # mdBook configuration; docs/theme/aicr.css is the palette
-├── .vale.ini                # Vale prose lint over README.md, docs/ and the example README
+├── .vale.ini                # Vale prose lint over README.md, docs/ and the example and e2e READMEs
 ├── example/clusterstack/    # XRD, Composition, XRs, schema stand-ins, render walkthrough
 ├── extensions/icons/        # Package icon; supplychain.yml appends it, README.md and an SBOM to the mirror image
 ├── .claude/skills/          # cut-release, remediate-cves (release procedures)
-├── .github/workflows/       # ci (check-diff, lint, unit-test), docs, publish-pkg, tag, grype-scan, supplychain
+├── .github/workflows/       # ci (check-diff, lint, unit-test), docs, e2e, publish-pkg, tag, grype-scan, supplychain
 ├── .github/renovate.json5   # Renovate: grouped bump PRs; aicr bumps wait for dependency-dashboard approval
 ├── .golangci.yml            # Lint configuration (golangci-lint v2)
 └── Dockerfile               # Distroless runtime image; Go version comes from go.mod
@@ -275,6 +278,24 @@ go test -race ./...
 
 `TestRunFunction` (fn_test.go) is the end-to-end suite: hand-written request fixtures under `test-fixtures/{input,observed,desired}/`, static response parts (requirements, results, conditions) asserted in code, and the desired state compared against goldens under `test-fixtures/want/`. `TestCatalogInvariants` resolves every leaf recipe with `recipe.ResolveLeaves` and asserts shape, not content: every manifest renders and parses, no two documents share an Object name, every managed component is in `DeploymentOrder`, every dependency names a real component, and the gate drains the whole recipe when everything it emits turns Ready. `TestGate` drives `stack.gate` through hand-built managed/observed maps.
 
+### End-to-End Suite
+
+`test/e2e` runs the function as a control plane does: built from the tree, installed as a Function package in a kind cluster with Crossplane, provider-helm and provider-kubernetes (a `ClusterProviderConfig` named `e2e` on each, pointing at the kind cluster itself), function-auto-ready and an OCI registry at `registry.e2e.svc:5443`. `test/e2e/README.md` is the reference.
+
+```bash
+git submodule update --init   # crossplane/build, once
+make e2e.up                   # kind, Crossplane, providers, registry, the function from this tree
+make e2e.test                 # go test in test/e2e against that cluster
+make e2e.function             # rebuild and reinstall the function after a code change
+make e2e.down
+```
+
+Two things hold it together. The Makefile uses the make library of the `build` submodule (`controlplane.mk`, `local.xpkg.mk`) and adds what the library lacks for a Function package: `xpkg.build.function-aicr` and `local.xpkg.deploy.function.%`, which loads the image into the node and installs the package from Crossplane's cache with `packagePullPolicy: Never`. The suite is a Go module of its own (`test/e2e/go.mod`), so that importing `github.com/crossplane/crossplane/v2/test/e2e/config` and `.../funcs` does not pull Crossplane's dependency tree into the function's `go.mod`; `go test ./...` at the root never builds it.
+
+Write a feature the way crossplane/crossplane does: a `Test...` function handing `environment.Test` a `features.NewWithDescription(...)`, labelled with `LabelArea`, `LabelSize` and `config.LabelTestSuite` (a feature without the last is failed by `TestMain`), its manifests under `test/e2e/manifests/<area>/<feature>/` and applied with `funcs.ApplyResources`. The Makefile is for the end-to-end cluster only: building, testing, generating and linting stay plain Go commands.
+
+`.github/workflows/e2e.yml` runs the suite on demand: from the Actions tab, or on a pull request labelled `e2e`. Renovate keeps the Makefile's pins, the suite's Go module and the submodule in groups that never automerge, since no required check exercises them.
+
 ### Test Patterns
 
 Tests are table-driven with `map[string]struct` keyed by case name and single inline `args`/`want` structs:
@@ -321,7 +342,7 @@ The documentation is an mdBook site built from `docs/` (`book.toml`; `docs/SUMMA
 mdbook serve                 # preview at http://localhost:3000
 mdbook build                 # into book/ (gitignored)
 vale sync                    # fetch the style packages .vale.ini pins, once
-vale README.md example/clusterstack/README.md docs
+vale README.md example/clusterstack/README.md test/e2e/README.md docs
 lychee --offline --include-fragments --exclude-path book/404.html 'book/**/*.html' README.md
 ```
 

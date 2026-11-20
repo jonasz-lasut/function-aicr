@@ -26,6 +26,7 @@ on:
       - 'book.toml'
       - 'README.md'
       - 'example/clusterstack/README.md'
+      - 'test/e2e/README.md'
       - '.vale.ini'
       - '.vale/**'
       - '.github/workflows/docs.yml'
@@ -35,6 +36,7 @@ on:
       - 'book.toml'
       - 'README.md'
       - 'example/clusterstack/README.md'
+      - 'test/e2e/README.md'
       - '.vale.ini'
       - '.vale/**'
       - '.github/workflows/docs.yml'
@@ -85,6 +87,7 @@ jobs:
             'book/**/*.html'
             README.md
             example/clusterstack/README.md
+            test/e2e/README.md
           fail: true
           failIfEmpty: true
 
@@ -123,7 +126,7 @@ jobs:
       - name: Lint the Prose
         run: |
           vale sync
-          if out=$(vale --output=line README.md example/clusterstack/README.md docs); then status=0; else status=$?; fi
+          if out=$(vale --output=line README.md example/clusterstack/README.md test/e2e/README.md docs); then status=0; else status=$?; fi
           if [ -n "$out" ]; then
             printf '%s\n' "$out"
             echo "vale: $(printf '%s\n' "$out" | wc -l | tr -d ' ') alerts"

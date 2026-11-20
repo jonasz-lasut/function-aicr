@@ -10,3 +10,8 @@
 !/.vale/styles/config
 /.vale/styles/config/*
 !/.vale/styles/config/vocabularies
+
+# The crossplane build submodule's output and tool cache (Makefile).
+/_output
+/.cache
+/.work
