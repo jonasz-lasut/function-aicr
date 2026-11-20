@@ -48,6 +48,14 @@ func TestEndToEndCatalog(t *testing.T) {
 				namespaces: map[string]string{"e2e-first": "e2e-first", "e2e-second": "e2e-second", "e2e-notes": "e2e-second"},
 			},
 		},
+		"KindInference": {
+			reason: "The recipe of the bundle checks feature adds e2e-checked, the one component with a check, and changes nothing else.",
+			args:   args{criteria: &recipe.Criteria{Service: recipe.CriteriaServiceKind, Intent: recipe.CriteriaIntentInference}},
+			want: want{
+				order:      []string{"e2e-checked", "e2e-first", "e2e-second", "e2e-notes"},
+				namespaces: map[string]string{"e2e-checked": "e2e-checked", "e2e-first": "e2e-first", "e2e-second": "e2e-second", "e2e-notes": "e2e-second"},
+			},
+		},
 		"KindTraining": {
 			reason: "The recipe a feature moves to places e2e-first in another namespace and changes nothing else.",
 			args:   args{criteria: &recipe.Criteria{Service: recipe.CriteriaServiceKind, Intent: recipe.CriteriaIntentTraining}},

@@ -86,11 +86,13 @@ own components remain.
 | `e2e-first` | A chart without dependencies. |
 | `e2e-second` | A chart that depends on `e2e-first`, with one manifest file before its release and one after. |
 | `e2e-notes` | A manifest-only component that depends on `e2e-second`. |
+| `e2e-checked` | A chart whose registry entry declares one of AICR's bundle checks. Only the inference recipe has it. |
 
-The criteria `service: kind` select that recipe. Adding `intent: training`
-selects one that places `e2e-first` in another namespace. `TestEndToEndCatalog`
-at the repository root resolves both and fails when an AICR upgrade adds a
-stock overlay that would join them.
+The criteria `service: kind` select the recipe of the first three. Adding
+`intent: training` selects one that places `e2e-first` in another namespace,
+and `intent: inference` one that adds `e2e-checked`. `TestEndToEndCatalog`
+at the repository root resolves the three recipes and fails when an AICR
+upgrade adds a stock overlay that would join them.
 
 ## The features
 
@@ -106,6 +108,7 @@ stock overlay that would join them.
 | `TestOverlay` | A change to the composite resource upgrades a release and removes a skipped component. |
 | `TestKeptNamespace` | A deployed component keeps its namespace when the recipe moves it, and an override moves it. |
 | `TestNodeScheduling` | `nodeScheduling` reaches the pods. |
+| `TestBundleChecks` | A recipe AICR would refuse to bundle isn't deployed, and a stack that's already deployed isn't refused. |
 | `TestStockRecipeOnSimulatedNodes` | The `kwok` profile's feature, described in the next section. |
 
 A feature makes a component wait without touching what the function

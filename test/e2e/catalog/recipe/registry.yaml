@@ -33,6 +33,27 @@ components:
           - nodeSelector
         tolerationPaths:
           - tolerations
+  # Only the inference recipe has this component. Its entry declares one of
+  # AICR's own bundle checks, as AICR's registry declares them: AICR refuses
+  # to bundle it without a node selector for the accelerated workloads. The
+  # check has no conditions, because AICR applies a condition on a criteria
+  # dimension to every recipe that leaves the dimension unstated too.
+  - name: e2e-checked
+    displayName: e2e-checked
+    class: core
+    helm:
+      defaultRepository: oci://registry.e2e.svc:5443/charts
+      defaultChart: e2e-app
+      defaultVersion: 0.1.0
+      defaultNamespace: e2e-checked
+    nodeScheduling:
+      accelerated:
+        nodeSelectorPaths:
+          - nodeSelector
+    validations:
+      - function: CheckAcceleratedSelectorMissing
+        severity: error
+        message: "The suite's e2e-checked runs on the accelerated pool."
   - name: e2e-notes
     displayName: e2e-notes
     class: ops
