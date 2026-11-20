@@ -46,7 +46,7 @@ PROVIDER_KUBERNETES_VERSION ?= v1.4.1
 # renovate: datasource=github-releases depName=crossplane-contrib/function-auto-ready
 FUNCTION_AUTO_READY_VERSION ?= v0.7.3
 # renovate: datasource=docker depName=registry
-REGISTRY_VERSION ?= 3.0.0
+REGISTRY_VERSION ?= 3.1.2
 # The release without its tag's `v`, as the archive is named.
 # renovate: datasource=github-releases depName=oras-project/oras extractVersion=^v(?<version>.*)$
 ORAS_VERSION ?= 1.4.0
