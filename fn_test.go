@@ -423,6 +423,54 @@ func TestRunFunction(t *testing.T) {
 				golden: golden{resources: "keep-namespace"},
 			},
 		},
+		"WiresDRAEviction": {
+			reason: "draEviction wires the three halves of AICR's eviction contract after the overrides: the Driver Manager's environment keeps the entry the override adds and gains the label key, the DRA kubelet plugin is scheduled on the label, and dra-node-labeler, whose manifest renders nothing by default, is enabled and composes its Objects.",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:     meta(),
+					Input:    yamlToProto("input/dra-eviction.yaml"),
+					Observed: &fnv1.State{Composite: fixture("observed/xr.yaml")},
+					RequiredSchemas: map[string]*fnv1.Schema{
+						"release": permissiveSchema(),
+						"object":  permissiveSchema(),
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta:         respMeta,
+					Requirements: releaseAndObjectRequirements(),
+					Conditions:   []*fnv1.Condition{functionSuccess()},
+				},
+				golden: golden{resources: "dra-eviction"},
+			},
+		},
+		"WarnsWhenDRAEvictionHasNoContract": {
+			reason: "Without all three components there is no contract: wiring one half would schedule the plugin on a label nothing applies, so nothing is wired and the opt-in is reported.",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:            meta(),
+					Input:           yamlToProto("input/dra-eviction-incomplete.yaml"),
+					Observed:        &fnv1.State{Composite: fixture("observed/xr.yaml")},
+					RequiredSchemas: map[string]*fnv1.Schema{"release": permissiveSchema()},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta:         respMeta,
+					Requirements: releaseRequirement(),
+					Results: []*fnv1.Result{{
+						Severity: fnv1.Severity_SEVERITY_WARNING,
+						Message:  `draEviction is set, but "nvidia-dra-driver-gpu" is not a managed component of the resolved recipe; the eviction contract spans gpu-operator, nvidia-dra-driver-gpu, dra-node-labeler, so nothing is wired`,
+						Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
+					}},
+					Conditions: []*fnv1.Condition{functionSuccess()},
+				},
+				golden: golden{resources: "dra-eviction-incomplete"},
+			},
+		},
 		"WritesSummaryToTarget": {
 			reason: "With target set, the resolved-recipe summary lands at the named field path on the desired XR.",
 			args: args{
@@ -948,6 +996,64 @@ func TestCatalogInvariants(t *testing.T) {
 				t.Errorf("the gate never emits %d of %d resources even with everything it emitted Ready — a dependency it can never see satisfied: %v", len(never), total, never)
 			}
 		})
+	}
+}
+
+// TestDRAEvictionAcrossTheCatalog wires the DRA eviction contract into every
+// leaf recipe that has its three components. The wiring copies value paths
+// AICR's bundler keeps private, so an AICR bump can move them without a
+// compile error: here a leaf whose values no longer take the wiring, or whose
+// dra-node-labeler still renders nothing once enabled, fails by name.
+func TestDRAEvictionAcrossTheCatalog(t *testing.T) {
+	ctx := context.Background()
+	dp := embeddedDataProvider()
+
+	leaves, err := recipe.ResolveLeaves(ctx, recipe.ResolveLeavesOptions{Provider: dp, Version: testRecipeVersion})
+	if err != nil {
+		t.Fatalf("recipe.ResolveLeaves(...): %v", err)
+	}
+
+	wired := 0
+	for _, leaf := range leaves {
+		if leaf.Err != nil {
+			continue // TestCatalogInvariants reports it.
+		}
+		rsp := &fnv1.RunFunctionResponse{}
+		managed := managedComponents(rsp, leaf.Result, &v1beta1.Input{}, nil)
+		complete := true
+		for _, name := range []string{compose.GPUOperatorComponent, compose.DRADriverComponent, compose.DRANodeLabelerComponent} {
+			if _, ok := managed[name]; !ok {
+				complete = false
+			}
+		}
+		if !complete {
+			continue
+		}
+		wired++
+
+		t.Run(leaf.Entry.Name, func(t *testing.T) {
+			values, err := resolveValues(ctx, leaf.Result, managed)
+			if err != nil {
+				t.Fatalf("resolveValues(...): %v", err)
+			}
+			s := &stack{managed: managed, values: values, dp: dp}
+			rsp := &fnv1.RunFunctionResponse{}
+			if err := s.wireDRAEviction(rsp); err != nil {
+				t.Fatalf("wireDRAEviction(...): %v", err)
+			}
+			if len(rsp.GetResults()) > 0 {
+				t.Fatalf("wireDRAEviction(...) reported %v for a recipe that has all three components", rsp.GetResults())
+			}
+			if err := s.renderObjects(ctx); err != nil {
+				t.Fatalf("renderObjects(...): %v", err)
+			}
+			if len(s.objects.all(compose.DRANodeLabelerComponent)) == 0 {
+				t.Errorf("dra-node-labeler renders no document with the contract wired: nothing would apply the label the DRA kubelet plugin is scheduled on")
+			}
+		})
+	}
+	if wired == 0 {
+		t.Error("no leaf recipe has gpu-operator, nvidia-dra-driver-gpu and dra-node-labeler: the DRA eviction wiring has nothing left to wire")
 	}
 }
 

@@ -180,6 +180,12 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 		response.Fatal(rsp, errors.Wrapf(err, "cannot get observed composed resources from %T", req))
 		return rsp, nil
 	}
+	if in.DRAEviction {
+		if err := s.wireDRAEviction(rsp); err != nil {
+			response.Fatal(rsp, err)
+			return rsp, nil
+		}
+	}
 	s.keepNamespaces(rsp)
 	if err := s.renderObjects(ctx); err != nil {
 		response.Fatal(rsp, err)
@@ -274,6 +280,51 @@ type stack struct {
 	// waiting names, per component the gate withheld, what it waits for: a
 	// dependency, or one of its own pre-manifest Objects.
 	waiting map[string]string
+}
+
+// wireDRAEviction wires AICR's DRA eviction contract into the values of the
+// three components it spans. AICR's bundler does this behind its
+// --dra-eviction-node-label opt-in and drops dra-node-labeler otherwise; the
+// function does not use the bundler, so without the opt-in the labeler stays
+// in the recipe and its manifest renders nothing.
+//
+// Like the bundler, it wires after the overrides are applied, so an override
+// cannot leave the halves of the contract disagreeing: each component's
+// override values are merged into its values first and then cleared. Without
+// all three components there is no contract to wire, which is a warning
+// rather than half a contract.
+func (s *stack) wireDRAEviction(rsp *fnv1.RunFunctionResponse) error {
+	names := []string{compose.GPUOperatorComponent, compose.DRADriverComponent, compose.DRANodeLabelerComponent}
+	for _, name := range names {
+		if _, ok := s.managed[name]; !ok {
+			response.Warning(rsp, errors.Errorf("draEviction is set, but %q is not a managed component of the resolved recipe; the eviction contract spans %s, so nothing is wired", name, strings.Join(names, ", ")))
+			return nil
+		}
+	}
+	operator, driver, labeler, err := compose.WireDRAEviction(
+		s.takeValues(compose.GPUOperatorComponent),
+		s.takeValues(compose.DRADriverComponent),
+		s.takeValues(compose.DRANodeLabelerComponent),
+	)
+	if err != nil {
+		return err
+	}
+	s.values[compose.GPUOperatorComponent] = operator
+	s.values[compose.DRADriverComponent] = driver
+	s.values[compose.DRANodeLabelerComponent] = labeler
+	return nil
+}
+
+// takeValues returns the values a component is deployed with, its override
+// merged in, and clears the override's values so nothing merges them a second
+// time over what is then written on top.
+func (s *stack) takeValues(name string) map[string]any {
+	values := s.values[name]
+	if o := s.overrides[name]; o != nil && o.Values != nil {
+		values = compose.MergeValues(values, o.Values)
+		o.Values = nil
+	}
+	return values
 }
 
 // keepNamespaces makes a component that is already deployed keep the

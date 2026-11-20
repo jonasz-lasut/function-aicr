@@ -331,6 +331,24 @@ A resource that has already been observed is never gated: the gate orders
 creation and must never tear down a live resource because a sibling went
 briefly unready.
 
+### DRA eviction for GPU driver upgrades
+
+When the GPU Operator replaces a driver in place, the DRA kubelet plugin has
+to leave the node first. AICR's contract for that spans three components, and
+`draEviction: true` wires it:
+
+- `dra-node-labeler`, whose manifest renders nothing by default, is enabled
+  and labels every GPU node `nvidia.com/dra-kubelet-plugin=true`;
+- `nvidia-dra-driver-gpu` schedules its kubelet plugin only on that label;
+- `gpu-operator` is told the label's key, so its Driver Manager can change
+  the label's value while it replaces the driver, which makes the plugin
+  leave the node, and restore it afterwards.
+
+The wiring is applied after `componentOverrides` and keeps other node
+selectors and environment entries. A recipe without all three components has
+no contract to wire: the function raises a Warning and wires nothing. The
+OpenShift variants of the components aren't covered, as in AICR.
+
 ### Upgrade warnings
 
 A pass can change the chart version of a `Release` that is already deployed:
@@ -420,6 +438,7 @@ The function's input is a KRM-like object of `kind: Input`,
 | `providerConfigRef` | object (`ProviderConfigRef`), optional | — | The provider config for the target cluster, stamped onto every composed `Release` and `Object`. |
 | `providerConfigRef.kind` | string, optional | `ClusterProviderConfig` | Enum: `ClusterProviderConfig`, `ProviderConfig`. A kind set by the overlay is held to the same two values. |
 | `providerConfigRef.name` | string, **required** | — | From the `Input` or its overlay, so one Composition can target the cluster each composite resource names. |
+| `draEviction` | bool, optional | `false` | Wires AICR's DRA eviction contract across `gpu-operator`, `nvidia-dra-driver-gpu` and `dra-node-labeler`; see [DRA eviction for GPU driver upgrades](#dra-eviction-for-gpu-driver-upgrades). |
 | `skipDeploymentOrder` | bool, optional | `false` | When `true`, every component is emitted at once rather than withheld until its dependencies report `Ready`. |
 | `componentClasses` | `[]string`, optional | `[]` (every class) | Limits the recipe to the components of the named AICR classes, `core` or `ops`. Any other name is Fatal. |
 | `skipComponents` | `[]ComponentRef`, optional | `[]` | Components excluded from the resolved recipe. Each entry is `{name: string}` (`name` required). An entry naming no component of the resolved recipe raises a Warning result — a typo would otherwise silently deploy the component. |

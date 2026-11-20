@@ -51,6 +51,7 @@ Crossplane RunFunctionRequest
 │  5. managedComponents: enabled, not skipped, Helm-typed refs         │
 │     (Warnings for skip/override names that match nothing)            │
 │  6. resolveValues: effective values per component                    │
+│     stack.wireDRAEviction (draEviction): the three-chart contract    │
 │     stack.keepNamespaces: a deployed Release keeps its namespace     │
 │  7. stack.renderObjects: per component, per wave (pre/post):         │
 │       manifest file → RenderManifest → SplitManifests →              │
@@ -90,6 +91,7 @@ internal/resolve/                 static Input + observed XR → the resolved In
 internal/compose/                 Builds the composed resources (map[string]any)
     ├── release.go                NewRelease, Override, effective(), SplitChart, MergeValues
     ├── manifest.go               RenderManifest via aicr/pkg/manifest.Render
+    ├── draeviction.go            WireDRAEviction: a copy of the bundler's eviction wiring
     └── object.go                 SplitManifests, ManifestObjectName, NewObject
     ↓
 internal/schema/                  Validator: compile a required schema once, Validate many
@@ -149,6 +151,7 @@ type Input struct {
     Profile               map[string]string            // one recipe variant, {gpuStack: dra}
     Configuration         *Configuration               // gke.tcpxoInterfaces, runtimeInventory.mode
     ProviderConfigRef     *ProviderConfigRef           // kind (enum, default ClusterProviderConfig) + name
+    DRAEviction           bool                         // wire AICR's DRA eviction contract
     SkipDeploymentOrder   bool                         // emit everything at once, no gate
     ComponentClasses      []string                     // core and/or ops; unset = every class
     SkipComponents        []ComponentRef               // {name} entries removed from the recipe
@@ -197,6 +200,12 @@ Composed resources are `map[string]any` (see Design Decisions), built in `intern
 - **Object** (`kubernetes.m.crossplane.io/v1alpha1`) — one per document of every `preManifestFiles` (wave `pre`) and `manifestFiles` (wave `post`) entry, named `ManifestObjectName(component, wave, doc, index)` = `<component>-<pre|post>-<kind>-<slugged name>` (or `<component>-<wave>-<index>` when a document has no kind/name). Manifest files are Go/Helm templates rendered with `aicr/pkg/manifest.Render` from the same effective namespace/chart/version/values as the Release, so an override cannot make them disagree.
 
 Names are pure functions of their inputs because the gate correlates observed against desired resources by name. This also means one composite per target namespace: two would claim the same names.
+
+### DRA eviction
+
+`draEviction: true` makes `stack.wireDRAEviction` write AICR's DRA eviction contract into the values of `gpu-operator` (`driver.manager.env` gains `NODE_LABEL_FOR_GPU_POD_EVICTION`), `nvidia-dra-driver-gpu` (`kubeletPlugin.nodeSelector` gains the label) and `dra-node-labeler` (`enabled`, `labelKey`, `labelValue`). It runs before the manifests are rendered and after the overrides are merged (`stack.takeValues` merges and clears them), as the bundler injects after user overrides. Missing any of the three components is a Warning and nothing is wired.
+
+`compose.WireDRAEviction` is a copy of logic AICR's bundler keeps unexported (`injectDRAEvictionLabel`, `mergeDRAEvictionNodeSelector` and `upsertGPUOperatorDRAEvictionEnv` in `aicr.run/pkg/bundler/bundler.go`); only the default label is imported, from `aicr.run/pkg/defaults`. Two tests guard the copy: `TestDRAEvictionConstants` parses the bundler source of the pinned module and compares its constants with ours, and `TestDRAEvictionAcrossTheCatalog` wires every leaf that has the three components and requires the labeler to render.
 
 ### Sticky namespaces
 
@@ -332,7 +341,8 @@ The `aicr.run` version is the recipe catalog version (AICR renamed its Go module
 2. `go test ./...` — `TestRunFunction` fails wherever recipe content changed; `TestCatalogInvariants` fails, naming the leaf and component, wherever a recipe's *shape* broke an assumption (a manifest that no longer renders, a name collision, a dependency edge into a component the gate cannot see)
 3. `go generate ./...` and **review the diff under `test-fixtures/want/`** — it is exactly what the function will now deploy. Commit it with the bump.
 4. Re-render the examples (`example/clusterstack/README.md`) for both XRs
-5. Fix behaviour changes by hand: the static parts of each response are asserted in code, not regenerated. A component the catalog adds joins every `TestRunFunction` fixture that does not list it under `skipComponents`; add it there to keep the pinned tier small
+5. Re-read the bundler's DRA eviction wiring: `injectDRAEvictionLabel` and its two helpers in `aicr.run/pkg/bundler/bundler.go`, plus `draNodeLabelerDropReason` for when the labeler applies. `compose.WireDRAEviction` is a hand copy of that logic. `TestDRAEvictionConstants` catches a renamed constant or a moved value path; a change in behaviour (a new component in the contract, a new condition, a different merge rule) only shows in the source, so diff those functions against the previous AICR version and port what changed
+6. Fix behaviour changes by hand: the static parts of each response are asserted in code, not regenerated. A component the catalog adds joins every `TestRunFunction` fixture that does not list it under `skipComponents`; add it there to keep the pinned tier small
 
 Since aicr v0.19.0 the resolver enforces a coverage post-condition: every stated dimension must be honored by an applied overlay. Do not reintroduce client-side defaults (e.g. `os: ubuntu`) or cross-field rules — leave unresolved dimensions unstated and let AICR answer.
 

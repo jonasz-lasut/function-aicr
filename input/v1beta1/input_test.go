@@ -47,6 +47,7 @@ configuration:
 providerConfigRef:
   kind: ClusterProviderConfig
   name: gpu-cluster
+draEviction: true
 skipDeploymentOrder: true
 componentClasses:
 - core
@@ -81,6 +82,7 @@ target:
 					Kind: "ClusterProviderConfig",
 					Name: "gpu-cluster",
 				},
+				DRAEviction:         true,
 				SkipDeploymentOrder: true,
 				ComponentClasses:    []string{"core"},
 				SkipComponents:      []ComponentRef{{Name: "cert-manager"}},

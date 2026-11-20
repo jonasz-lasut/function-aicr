@@ -55,6 +55,14 @@ type Input struct {
 	// +optional
 	ProviderConfigRef *ProviderConfigRef `json:"providerConfigRef,omitempty"`
 
+	// DRAEviction wires AICR's DRA eviction contract, so the GPU Operator can
+	// evict the DRA kubelet plugin ahead of an in-place GPU driver upgrade:
+	// dra-node-labeler is enabled and labels every GPU node, the plugin is
+	// scheduled on that label, and the GPU Operator is told its key. It needs
+	// gpu-operator, nvidia-dra-driver-gpu and dra-node-labeler in the recipe.
+	// +optional
+	DRAEviction bool `json:"draEviction,omitempty"`
+
 	// SkipDeploymentOrder deploys every component at once rather than
 	// withholding a component until its dependencies report Ready.
 	// +optional

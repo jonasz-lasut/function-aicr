@@ -1,0 +1,29 @@
+apiVersion: aicr.fn.crossplane.io/v1beta1
+kind: Input
+overlayFrom:
+  fieldPath: spec.aicr
+providerConfigRef:
+  kind: ClusterProviderConfig
+  name: gpu-cluster
+skipDeploymentOrder: true
+draEviction: true
+componentOverrides:
+  gpu-operator:
+    values:
+      driver:
+        manager:
+          env:
+          - name: ENABLE_AUTO_DRAIN
+            value: "true"
+skipComponents:
+- name: cert-manager
+- name: k8s-ephemeral-storage-metrics
+- name: kai-scheduler
+- name: kube-prometheus-stack
+- name: network-operator
+- name: nfd
+- name: nktp
+- name: nodewright-operator
+- name: nvsentinel
+- name: prometheus-adapter
+- name: prometheus-operator-crds
