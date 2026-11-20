@@ -155,14 +155,15 @@
       groupName: 'github-actions',
     },
 
-    // The end-to-end suite: the cluster's pins in the Makefile, the suite's
-    // own Go module and the build submodule. A change to the suite itself
-    // is merged by hand, once the suite is green.
+    // The end-to-end suite: the cluster's pins in the Makefile and the suite's
+    // own Go module, in one pull request. It is merged like any other update:
+    // Renovate labels its pull requests `e2e`, so both profiles of the suite
+    // run on it, and merges only when every check is green.
     {
       matchFileNames: ['Makefile', 'test/e2e/**'],
       groupName: 'e2e',
-      automerge: false,
     },
+    // The make library is not a version Renovate can rate minor or patch.
     { matchManagers: ['git-submodules'], groupName: 'build submodule', automerge: false },
 
     // Package refs in the render example.
