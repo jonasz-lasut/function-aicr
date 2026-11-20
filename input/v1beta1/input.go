@@ -36,6 +36,19 @@ type Input struct {
 	// +optional
 	Criteria *Criteria `json:"criteria,omitempty"`
 
+	// Profile selects a variant of the recipe, keyed by profile name, for
+	// example {gpuStack: dra}. AICR accepts one selection per recipe and
+	// rejects one on a recipe that declares no profile; unset, the recipe's
+	// default variant is deployed.
+	// +kubebuilder:validation:MaxProperties=1
+	// +optional
+	Profile map[string]string `json:"profile,omitempty"`
+
+	// Configuration holds choices that shape the resolved recipe without
+	// selecting it. It mirrors AICR's own recipe configuration.
+	// +optional
+	Configuration *Configuration `json:"configuration,omitempty"`
+
 	// ProviderConfigRef references the provider config holding credentials for
 	// the target cluster. It is stamped onto every composed Release and Object.
 	// A name is required, here or from the overlay.
@@ -73,6 +86,42 @@ type Criteria struct {
 	OS string `json:"os,omitempty"`
 	// +optional
 	Platform string `json:"platform,omitempty"`
+}
+
+// Configuration holds choices that shape the resolved recipe without
+// selecting it. AICR validates every one of them.
+type Configuration struct {
+	// GKE holds choices that only GKE recipes take.
+	// +optional
+	GKE *GKEConfiguration `json:"gke,omitempty"`
+
+	// RuntimeInventory selects whether the recipe includes AICR's runtime AI
+	// workload inventory component, k8s-aibom.
+	// +optional
+	RuntimeInventory *RuntimeInventoryConfiguration `json:"runtimeInventory,omitempty"`
+}
+
+// GKEConfiguration holds choices that only GKE recipes take.
+type GKEConfiguration struct {
+	// TCPXOInterfaces maps the guest interfaces eth1 to eth8 to the cluster's
+	// GKE Network objects. A recipe that includes the torch-distributed-tcpxo
+	// runtime requires it; AICR rejects it on any other recipe.
+	// +listType=atomic
+	// +optional
+	TCPXOInterfaces []NetworkInterfaceMapping `json:"tcpxoInterfaces,omitempty"`
+}
+
+// A NetworkInterfaceMapping binds a guest interface to a GKE Network object.
+type NetworkInterfaceMapping struct {
+	InterfaceName string `json:"interfaceName"`
+	Network       string `json:"network"`
+}
+
+// RuntimeInventoryConfiguration selects the runtime inventory mode.
+type RuntimeInventoryConfiguration struct {
+	// Mode is enabled or disabled. Enabled keeps k8s-aibom where the recipe
+	// includes it and adds it to any other GKE recipe; disabled removes it.
+	Mode string `json:"mode"`
 }
 
 // An OverlayFrom names where an overlay of the Input is read from.

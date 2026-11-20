@@ -203,10 +203,45 @@ dimension is passed to AICR unstated, so resolution selects the agnostic tier fo
 alone decides which combinations exist and rejects a stated value no recipe
 honors.
 
-A recipe can require a typed input beyond its criteria. In the v1.3.0 catalog
-that is `h100` / `gke` / `cos` / `training` / `kubeflow`, which needs a GKE
-TCPXO interface mapping. The `Input` has no field for it, so the function is
-Fatal for that recipe with AICR's own message.
+### Recipe variants and configuration
+
+Two inputs shape a recipe after the criteria have selected it. AICR validates
+both, and rejects either on a recipe it doesn't apply to, so they are natural
+overlay fields: the composite resource that needs one sets it.
+
+`profile` selects a variant the recipe declares, as `{<name>: <value>}`. The
+GKE COS recipes, for example, declare `gpuStack` with `gke-default`,
+`bundle-installer` and `dra`. Unset, the recipe's default variant is deployed.
+
+`configuration` holds typed choices, in the shape of AICR's own recipe
+configuration:
+
+- `gke.tcpxoInterfaces` maps the guest interfaces `eth1` to `eth8` to the
+  cluster's GKE Network objects. The `h100` / `gke` / `cos` / `training` /
+  `kubeflow` recipe requires it, and without it the function is Fatal with
+  AICR's own message.
+- `runtimeInventory.mode` is `enabled` or `disabled`. `enabled` adds
+  `k8s-aibom`, AICR's runtime AI workload inventory, to a GKE recipe that
+  doesn't include it; `disabled` removes it from one that does.
+
+```yaml
+spec:
+  aicr:
+    criteria:
+      accelerator: h100
+      service: gke
+      os: cos
+      intent: training
+      platform: kubeflow
+    profile:
+      gpuStack: dra
+    configuration:
+      gke:
+        tcpxoInterfaces:
+        - interfaceName: eth1
+          network: my-cluster-gpu-nic-0
+        # eth2 to eth8
+```
 
 ### Components, charts and manifest files
 
@@ -323,6 +358,10 @@ The function's input is a KRM-like object of `kind: Input`,
 | `criteria.intent` | string, optional | `""` | `training` or `inference`. |
 | `criteria.os` | string, optional | `""` (unstated) | e.g. `ubuntu`, `cos`, `talos`. Left unstated when neither the `Input` nor its overlay sets it, so AICR selects the OS-agnostic recipe tier. AICR rejects an OS no recipe for the service honors (e.g. `ubuntu` on `kind`), and asks for one when a service+accelerator pair has only OS-specific recipes. |
 | `criteria.platform` | string, optional | `""` | e.g. `kubeflow`, `slurm`, `runai`, `dynamo`, `nim`. |
+| `profile` | `map[string]string`, optional | unset | One recipe variant, keyed by profile name, e.g. `{gpuStack: dra}`. AICR accepts one selection and rejects one on a recipe that declares no profile. |
+| `configuration` | object (`Configuration`), optional | unset | Choices that shape the resolved recipe without selecting it; see [Recipe variants and configuration](#recipe-variants-and-configuration). |
+| `configuration.gke.tcpxoInterfaces` | `[]{interfaceName, network}`, optional | unset | The eight `eth1` to `eth8` GKE Network mappings a recipe with the `torch-distributed-tcpxo` runtime requires. |
+| `configuration.runtimeInventory.mode` | string, optional | unset | `enabled` or `disabled`; adds or removes `k8s-aibom`. |
 | `providerConfigRef` | object (`ProviderConfigRef`), optional | — | The provider config for the target cluster, stamped onto every composed `Release` and `Object`. |
 | `providerConfigRef.kind` | string, optional | `ClusterProviderConfig` | Enum: `ClusterProviderConfig`, `ProviderConfig`. A kind set by the overlay is held to the same two values. |
 | `providerConfigRef.name` | string, **required** | — | From the `Input` or its overlay, so one Composition can target the cluster each composite resource names. |

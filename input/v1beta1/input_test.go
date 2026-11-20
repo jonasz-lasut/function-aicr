@@ -35,6 +35,15 @@ criteria:
   platform: kubeflow
 overlayFrom:
   fieldPath: spec.aicr
+profile:
+  gpuStack: dra
+configuration:
+  gke:
+    tcpxoInterfaces:
+    - interfaceName: eth1
+      network: gpu-nic-0
+  runtimeInventory:
+    mode: enabled
 providerConfigRef:
   kind: ClusterProviderConfig
   name: gpu-cluster
@@ -61,6 +70,11 @@ target:
 					Platform:    "kubeflow",
 				},
 				OverlayFrom: &OverlayFrom{FieldPath: "spec.aicr"},
+				Profile:     map[string]string{"gpuStack": "dra"},
+				Configuration: &Configuration{
+					GKE:              &GKEConfiguration{TCPXOInterfaces: []NetworkInterfaceMapping{{InterfaceName: "eth1", Network: "gpu-nic-0"}}},
+					RuntimeInventory: &RuntimeInventoryConfiguration{Mode: "enabled"},
+				},
 				ProviderConfigRef: &ProviderConfigRef{
 					Kind: "ClusterProviderConfig",
 					Name: "gpu-cluster",

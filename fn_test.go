@@ -305,6 +305,69 @@ func TestRunFunction(t *testing.T) {
 				golden: golden{resources: "resolve"},
 			},
 		},
+		"PassesTheGKETCPXOMappingFromTheXR": {
+			reason: "The kubeflow recipe on GKE requires the cluster's GPU network names. They are a list only the XR knows, so they arrive through the overlay and reach AICR as a build option; the kubeflow-trainer Release and its TCPXO runtime Object carry them.",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:     meta(),
+					Input:    yamlToProto("input/gke-tcpxo.yaml"),
+					Observed: &fnv1.State{Composite: fixture("observed/xr-gke-kubeflow.yaml")},
+					RequiredSchemas: map[string]*fnv1.Schema{
+						"release": permissiveSchema(),
+						"object":  permissiveSchema(),
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta:         respMeta,
+					Requirements: releaseAndObjectRequirements(),
+					Conditions:   []*fnv1.Condition{functionSuccess()},
+				},
+				golden: golden{resources: "gke-tcpxo"},
+			},
+		},
+		"SelectsAProfile": {
+			reason: "profile selects a variant of the recipe: with gpuStack=dra on GKE the DRA driver is deployed as the GPU advertiser.",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:            meta(),
+					Input:           yamlToProto("input/profile.yaml"),
+					Observed:        &fnv1.State{Composite: fixture("observed/xr.yaml")},
+					RequiredSchemas: map[string]*fnv1.Schema{"release": permissiveSchema()},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta:         respMeta,
+					Requirements: releaseRequirement(),
+					Conditions:   []*fnv1.Condition{functionSuccess()},
+				},
+				golden: golden{resources: "profile"},
+			},
+		},
+		"EnablesRuntimeInventory": {
+			reason: "configuration.runtimeInventory.mode enabled adds k8s-aibom to a GKE recipe that does not include it.",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:            meta(),
+					Input:           yamlToProto("input/runtime-inventory.yaml"),
+					Observed:        &fnv1.State{Composite: fixture("observed/xr.yaml")},
+					RequiredSchemas: map[string]*fnv1.Schema{"release": permissiveSchema()},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta:         respMeta,
+					Requirements: releaseRequirement(),
+					Conditions:   []*fnv1.Condition{functionSuccess()},
+				},
+				golden: golden{resources: "runtime-inventory"},
+			},
+		},
 		"WritesSummaryToTarget": {
 			reason: "With target set, the resolved-recipe summary lands at the named field path on the desired XR.",
 			args: args{
@@ -512,7 +575,7 @@ func TestRunFunction(t *testing.T) {
 			},
 		},
 		"FatalWhenRecipeNeedsConfiguration": {
-			reason: "A recipe that requires a typed generation-time input the Input cannot carry (the GKE TCPXO interface mapping) fails with AICR's own message rather than deploying a runtime without its networks.",
+			reason: "A recipe that requires the GKE TCPXO interface mapping fails with AICR's own message when configuration.gke.tcpxoInterfaces is not set, rather than deploying a runtime without its networks.",
 			args: args{
 				ctx: context.Background(),
 				req: &fnv1.RunFunctionRequest{
@@ -687,10 +750,10 @@ func TestCatalogInvariants(t *testing.T) {
 			res, err := builder.BuildFromCriteria(ctx, criteria)
 			if recipe.IsMissingGKETCPXOInterfaces(err) {
 				// The one leaf family with a required typed input: a GKE
-				// network mapping the Input cannot carry, so RunFunction is
-				// Fatal for it (FatalWhenRecipeNeedsConfiguration). Resolve
-				// it with AICR's fixed introspection mapping, as its own
-				// leaf enumeration does, so the leaf's shape stays covered.
+				// network mapping only a cluster can name, without which
+				// RunFunction is Fatal (FatalWhenRecipeNeedsConfiguration).
+				// Resolve it with AICR's fixed introspection mapping, as its
+				// own leaf enumeration does, so the leaf's shape stays covered.
 				res, err = builder.BuildFromCriteria(ctx, criteria, recipe.WithGKETCPXOInterfaces(recipe.GKETCPXOIntrospectionInterfaces()))
 			}
 			if err != nil {

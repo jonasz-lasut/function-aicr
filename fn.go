@@ -136,7 +136,14 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 		return rsp, nil
 	}
 
-	res, err := recipe.NewBuilder(recipe.WithVersion(f.recipeVersion), recipe.WithDataProvider(f.dp)).BuildFromCriteria(ctx, criteria)
+	profile, err := resolve.Profile(in)
+	if err != nil {
+		response.Fatal(rsp, errors.Wrap(err, "cannot resolve the recipe profile"))
+		return rsp, nil
+	}
+
+	res, err := recipe.NewBuilder(recipe.WithVersion(f.recipeVersion), recipe.WithDataProvider(f.dp)).
+		BuildFromCriteriaWithProfile(ctx, criteria, profile, resolve.BuildOptions(in)...)
 	if err != nil {
 		response.Fatal(rsp, errors.Wrap(err, "cannot resolve AICR recipe"))
 		return rsp, nil

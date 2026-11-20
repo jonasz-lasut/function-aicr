@@ -46,7 +46,8 @@ Crossplane RunFunctionRequest
 │  2. resolve.ProviderConfigRef and resolve.Criteria from the          │
 │     resolved Input; Criteria.Validate                                │
 │  3. Fatal unless Crossplane advertises CAPABILITY_REQUIRED_SCHEMAS   │
-│  4. recipe.NewBuilder(...).BuildFromCriteria → RecipeResult          │
+│  4. resolve.Profile, resolve.BuildOptions (configuration);           │
+│     recipe.NewBuilder(...).BuildFromCriteriaWithProfile → result     │
 │  5. managedComponents: enabled, not skipped, Helm-typed refs         │
 │     (Warnings for skip/override names that match nothing)            │
 │  6. resolveValues: effective values per component                    │
@@ -81,6 +82,7 @@ input/v1beta1/input.go            Input, OverlayFrom, Criteria, ProviderConfigRe
 internal/resolve/                 static Input + observed XR → the resolved Input
     ├── input.go                  Input(): static Input + overlay, strict decoding
     ├── criteria.go               Criteria(): ≥1 dimension
+    ├── selection.go              Profile(): one name=value; BuildOptions(): configuration
     └── providerconfig.go         ProviderConfigRef(): kind enum, name required
     ↓
 internal/compose/                 Builds the composed resources (map[string]any)
@@ -142,6 +144,8 @@ The function receives an `Input` (`aicr.fn.crossplane.io/v1beta1`) — a KRM-lik
 type Input struct {
     OverlayFrom           *OverlayFrom                 // fieldPath of an Input-shaped object on the XR, merged over the rest
     Criteria              *Criteria                    // accelerator/service/intent/os/platform
+    Profile               map[string]string            // one recipe variant, {gpuStack: dra}
+    Configuration         *Configuration               // gke.tcpxoInterfaces, runtimeInventory.mode
     ProviderConfigRef     *ProviderConfigRef           // kind (enum, default ClusterProviderConfig) + name
     SkipDeploymentOrder   bool                         // emit everything at once, no gate
     SkipComponents        []ComponentRef               // {name} entries removed from the recipe
@@ -167,6 +171,8 @@ Every field of the `Input` is static, the value all composite resources get, unl
 5. a path holding anything but an object, an overlay that sets `overlayFrom` (or `apiVersion`, `kind`, `metadata`), a field the Input does not have → error (Fatal), never a silent fallback
 
 Both the static Input and the merged result are decoded strictly (`DisallowUnknownFields`), so a typo in the Composition or on the XR is Fatal. The XRD is what limits the overlay: Crossplane prunes fields the XRD does not declare, so a composite resource controls exactly the Input fields the XRD author put under the overlay path. `resolve.Criteria` and `resolve.ProviderConfigRef` then read the resolved Input.
+
+`profile` and `configuration` shape the recipe after the criteria selected it: `resolve.Profile` turns the one-entry map into AICR's `name=value` selection for `BuildFromCriteriaWithProfile`, and `resolve.BuildOptions` turns each set `configuration` choice into a `recipe.BuildOption`. Each is passed only when set, because AICR rejects one on a recipe it does not apply to, and AICR validates the values: the function mirrors no list of profile names, modes or interface rules.
 
 At least one criteria dimension must be set; every unset dimension is passed to AICR **unstated**. Never default a dimension client-side (see Design Decisions). `Criteria.Validate()` (AICR's) checks stated values against AICR's enums; AICR's resolver then rejects a stated value no recipe honors.
 
@@ -432,7 +438,7 @@ The function exits (and the pod crashloops) when the `--recipe-oci-*` source can
 
 ### "this recipe ships torch-distributed-tcpxo and requires configuration.gke.tcpxoInterfaces"
 
-The `h100` / `gke` / `cos` / `training` / `kubeflow` recipe needs a GKE TCPXO interface mapping (`recipe.WithGKETCPXOInterfaces`), a typed generation-time input the `Input` has no field for. The function is Fatal for that recipe; `TestCatalogInvariants` resolves it with AICR's introspection mapping so its shape stays covered.
+The `h100` / `gke` / `cos` / `training` / `kubeflow` recipe needs a GKE TCPXO interface mapping. Set `configuration.gke.tcpxoInterfaces`, usually through the overlay, since the network names are per cluster. `TestCatalogInvariants` resolves the leaf with AICR's introspection mapping so its shape stays covered.
 
 ### "no recipe provides os 'ubuntu' for criteria(…)" / "invalid AICR recipe criteria"
 
