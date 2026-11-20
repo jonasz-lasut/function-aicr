@@ -140,3 +140,133 @@ func DeleteNamespaces(d time.Duration, names ...string) features.Func {
 		return ctx
 	}
 }
+
+// DeleteIfExists deletes the supplied resources; one that does not exist is
+// skipped.
+func DeleteIfExists(objs ...k8s.Object) features.Func {
+	return func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		t.Helper()
+
+		for _, o := range objs {
+			err := c.Client().Resources().Delete(ctx, o)
+			if err != nil && !kerrors.IsNotFound(err) {
+				t.Fatalf("cannot delete %s/%s: %v", o.GetNamespace(), o.GetName(), err)
+			}
+		}
+
+		return ctx
+	}
+}
+
+// ResourceIsNotReady fails if the supplied resource has a Ready condition
+// that is True.
+func ResourceIsNotReady(o *unstructured.Unstructured) features.Func {
+	return func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		t.Helper()
+
+		if err := c.Client().Resources().Get(ctx, o.GetName(), o.GetNamespace(), o); err != nil {
+			t.Fatalf("cannot get %s %s/%s: %v", o.GetKind(), o.GetNamespace(), o.GetName(), err)
+		}
+
+		if readyStatus(o) == string(corev1.ConditionTrue) {
+			t.Errorf("%s %s/%s is ready, but must not be", o.GetKind(), o.GetNamespace(), o.GetName())
+		}
+
+		return ctx
+	}
+}
+
+// PauseReconciliation makes the provider of a managed resource leave it
+// alone, with the annotation Crossplane defines for that.
+func PauseReconciliation(o *unstructured.Unstructured) features.Func {
+	return patchAnnotation(o, pausedAnnotation, "true")
+}
+
+// ResumeReconciliation undoes PauseReconciliation. A resource that no longer
+// exists is skipped.
+func ResumeReconciliation(o *unstructured.Unstructured) features.Func {
+	return patchAnnotation(o, pausedAnnotation, nil)
+}
+
+const pausedAnnotation = "crossplane.io/paused"
+
+// patchAnnotation merges an annotation into a resource; a nil value removes
+// it.
+func patchAnnotation(o *unstructured.Unstructured, key string, value any) features.Func {
+	return func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		t.Helper()
+
+		patch, err := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]any{key: value}}})
+		if err != nil {
+			t.Fatalf("cannot marshal the annotation patch: %v", err)
+		}
+
+		err = c.Client().Resources().Patch(ctx, o, k8s.Patch{PatchType: types.MergePatchType, Data: patch})
+		if kerrors.IsNotFound(err) {
+			return ctx
+		}
+
+		if err != nil {
+			t.Fatalf("cannot patch the annotations of %s %s/%s: %v", o.GetKind(), o.GetNamespace(), o.GetName(), err)
+		}
+
+		t.Logf("%s %s/%s: annotation %s set to %v", o.GetKind(), o.GetNamespace(), o.GetName(), key, value)
+
+		return ctx
+	}
+}
+
+// MarkUnready sets the Ready condition of a managed resource to False, as its
+// provider would when the external resource stops being available. The
+// resource has to be paused, or its provider sets the condition back.
+func MarkUnready(o *unstructured.Unstructured) features.Func {
+	return func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+		t.Helper()
+
+		if err := c.Client().Resources().Get(ctx, o.GetName(), o.GetNamespace(), o); err != nil {
+			t.Fatalf("cannot get %s %s/%s: %v", o.GetKind(), o.GetNamespace(), o.GetName(), err)
+		}
+
+		conditions, _, err := unstructured.NestedSlice(o.Object, "status", "conditions")
+		if err != nil {
+			t.Fatalf("cannot read the conditions of %s %s/%s: %v", o.GetKind(), o.GetNamespace(), o.GetName(), err)
+		}
+
+		for _, entry := range conditions {
+			condition, ok := entry.(map[string]any)
+			if !ok || condition["type"] != "Ready" {
+				continue
+			}
+
+			condition["status"] = string(corev1.ConditionFalse)
+			condition["reason"] = "Unavailable"
+			condition["lastTransitionTime"] = metav1.Now().UTC().Format(time.RFC3339)
+		}
+
+		if err := unstructured.SetNestedSlice(o.Object, conditions, "status", "conditions"); err != nil {
+			t.Fatalf("cannot set the conditions of %s %s/%s: %v", o.GetKind(), o.GetNamespace(), o.GetName(), err)
+		}
+
+		if err := c.Client().Resources().UpdateStatus(ctx, o); err != nil {
+			t.Fatalf("cannot update the status of %s %s/%s: %v", o.GetKind(), o.GetNamespace(), o.GetName(), err)
+		}
+
+		t.Logf("%s %s/%s: Ready set to False", o.GetKind(), o.GetNamespace(), o.GetName())
+
+		return ctx
+	}
+}
+
+// readyStatus returns the status of a resource's Ready condition, or "" when
+// it has none.
+func readyStatus(o *unstructured.Unstructured) string {
+	conditions, _, _ := unstructured.NestedSlice(o.Object, "status", "conditions")
+	for _, entry := range conditions {
+		if condition, ok := entry.(map[string]any); ok && condition["type"] == "Ready" {
+			status, _ := condition["status"].(string)
+			return status
+		}
+	}
+
+	return ""
+}

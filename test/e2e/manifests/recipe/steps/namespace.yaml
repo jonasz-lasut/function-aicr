@@ -1,0 +1,6 @@
+# e2e-second's namespace, created ahead of the recipe so that the quota next
+# to this file can be in it.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-second

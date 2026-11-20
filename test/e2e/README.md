@@ -82,6 +82,30 @@ selects one that places `e2e-first` in another namespace. `TestEndToEndCatalog`
 at the repository root resolves both and fails when an AICR upgrade adds a
 stock overlay that would join them.
 
+## The features
+
+| Feature | Proves |
+|---|---|
+| `TestFunctionInstalled` | The function, the providers and `function-auto-ready` report `Healthy`. |
+| `TestRecipeConverges` | A composite resource deploys its recipe, with charts from the registry and manifest files around them, and the summary describes it. |
+| `TestRolloutOrder` | A component is withheld until the component it depends on is ready. |
+| `TestRolloutSteps` | Within a component, the `Release` waits for the pre-manifest `Object`s and the post-manifest `Object`s wait for the `Release`. |
+| `TestLiveResourcesAreKept` | A deployed component that goes unready doesn't take what depends on it out of the cluster. |
+| `TestSkipDeploymentOrder` | `skipDeploymentOrder` composes everything at once. |
+| `TestSkippedDependency` | A skipped dependency counts as satisfied. |
+| `TestOverlay` | A change to the composite resource upgrades a release and removes a skipped component. |
+| `TestKeptNamespace` | A deployed component keeps its namespace when the recipe moves it, and an override moves it. |
+| `TestNodeScheduling` | `nodeScheduling` reaches the pods. |
+| `TestStockRecipeOnSimulatedNodes` | The `kwok` profile's feature, described in the next section. |
+
+A feature makes a component wait without touching what the function
+composed. A chart's pod is pending on a node selector until the feature
+gives a node the label, and a quota keeps a pre-manifest ConfigMap from
+being created until the feature deletes it. One state can't be produced that
+way: provider-helm keeps a `Release` ready after its pods stop, so
+`TestLiveResourcesAreKept` pauses the `Release` and sets its condition
+itself.
+
 ## The KWOK profile
 
 The suite's own catalog can't show whether a stock recipe deploys. The

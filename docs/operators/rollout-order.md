@@ -8,6 +8,11 @@ Every `Release` sets `spec.forProvider.wait: true`. provider-helm then
 reports a `Release` `Ready` only once the Helm release's resources are up,
 and that's the signal the gate reads.
 
+The signal is about the installation. provider-helm waits for the resources
+while it installs or upgrades a release. Afterward it reports the `Release`
+`Ready` for as long as the Helm release is deployed and matches the
+`Release`'s specification, even when its pods have stopped.
+
 ## The rules
 
 For each component:

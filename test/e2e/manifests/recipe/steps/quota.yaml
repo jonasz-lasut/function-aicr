@@ -1,0 +1,11 @@
+# While this quota exists no ConfigMap can be created in the namespace, which
+# is what e2e-second's pre-manifest file renders: its Object stays short of
+# ready until the feature deletes the quota.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: e2e-no-configmaps
+  namespace: e2e-second
+spec:
+  hard:
+    count/configmaps: "0"
