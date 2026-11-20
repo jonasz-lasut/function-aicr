@@ -42,12 +42,16 @@ make e2e.down
 ```
 
 `make e2e` does up, test and down in one go. After a failed run,
-`make e2e.dump` writes the cluster's state under `_output/controlplane-dump`.
+`make e2e.dump` writes the cluster's state under `_output/controlplane-dump`,
+with the function pod's log.
 
-One feature runs with Go's own filter:
+The suite runs through [`gotestsum`][gotestsum], which prints one line for
+each feature and step and the whole log of a feature only when it fails. To
+watch a run as `go test -v` prints it, and to run one feature:
 
 ```shell
-make e2e.test E2E_TEST_FLAGS='-v -count=1 -run TestRolloutOrder'
+make e2e.test E2E_TEST_FORMAT=standard-verbose
+make e2e.test E2E_TEST_FLAGS='-count=1 -run TestRolloutOrder'
 ```
 
 ## The cluster
@@ -163,6 +167,11 @@ A feature is a `Test...` function in this package that hands
 its manifests under `manifests/<area>/<feature>/` and apply them with
 `funcs.ApplyResources`.
 
+Put a long wait on a condition, with `funcs.ResourcesHaveConditionWithin`,
+and check field values after it. That helper logs a condition when it
+changes. `funcs.ResourcesHaveFieldValueWithin` logs a diff on every poll,
+and two minutes of waiting with that helper add more than a thousand lines.
+
 The recipe features share the XRD and the Composition under
 `manifests/recipe/setup` and each creates one composite resource. They run
 one at a time, and each deletes its composite resource and waits for the
@@ -171,6 +180,7 @@ install the same Helm releases. The namespaces of the charts remain, as
 they do after `helm uninstall`.
 
 [crossplane-e2e]: https://github.com/crossplane/crossplane/tree/main/test/e2e
+[gotestsum]: https://github.com/gotestyourself/gotestsum
 [aicr-kwok]: https://github.com/NVIDIA/aicr/tree/main/kwok
 [kwok]: https://kwok.sigs.k8s.io
 [recipe-source]: https://jonasz-lasut.github.io/function-aicr/operators/recipe-source.html
