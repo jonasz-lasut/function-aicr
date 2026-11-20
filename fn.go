@@ -19,7 +19,7 @@ import (
 	"github.com/crossplane/function-sdk-go/response"
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/NVIDIA/aicr/pkg/recipe"
+	"aicr.run/pkg/recipe"
 
 	"github.com/jonasz-lasut/function-aicr/input/v1beta1"
 	"github.com/jonasz-lasut/function-aicr/internal/compose"
@@ -77,7 +77,7 @@ type Function struct {
 	ttl time.Duration
 	dp  recipe.DataProvider
 	// recipeVersion stamps resolved recipes and is surfaced as the summary's
-	// recipeVersion: the github.com/NVIDIA/aicr module version, since that is
+	// recipeVersion: the aicr.run module version, since that is
 	// what pins the embedded recipe data.
 	recipeVersion string
 	// recipeSource identifies the OCI recipe artifact layered over the

@@ -88,9 +88,9 @@ Releases are published as `ghcr.io/jonasz-lasut/function-aicr`, mirrored at
 
 ## Recipe source
 
-By default the function serves the recipe catalog embedded in the
-`github.com/NVIDIA/aicr` module it was built with — the module version *is*
-the catalog version, and nothing is fetched at runtime.
+By default the function serves the recipe catalog embedded in the `aicr.run`
+module, AICR's Go module, that it was built with: the module version *is* the
+catalog version, and nothing is fetched at runtime.
 
 Two flags overlay that catalog with a digest-pinned OCI recipe artifact,
 pulled **once at startup** so no reconcile ever waits on a registry:
@@ -195,6 +195,11 @@ AICR unstated, so resolution selects the agnostic tier for it; AICR's catalog
 alone decides which combinations exist and rejects a stated value no recipe
 honors.
 
+A recipe can require a typed input beyond its criteria. In the v1.3.0 catalog
+that is `h100` / `gke` / `cos` / `training` / `kubeflow`, which needs a GKE
+TCPXO interface mapping. The `Input` has no field for it, so the function is
+Fatal for that recipe with AICR's own message.
+
 ### Components, charts and manifest files
 
 The function deploys the recipe's Helm components that AICR enables: a
@@ -282,7 +287,7 @@ status:
     - name: gpu-operator
 ```
 
-`recipeVersion` is the `github.com/NVIDIA/aicr` module version the function
+`recipeVersion` is the `aicr.run` module version the function
 was built with — what pins the embedded recipe data. When the function serves
 an [OCI recipe source](#recipe-source), a `recipeSource` key carries its
 `repository@digest` identity, since the module version alone no longer
@@ -336,8 +341,8 @@ that exercise it — with a `crossplane render` walkthrough:
 
 | Example | Description |
 |---------|-------------|
-| [xr.yaml](example/clusterstack/xr.yaml) | An `h100` / `kind` / `training` stack: `cert-manager` renders first, `gpu-operator` once it is observed `Ready` |
-| [xr-eks.yaml](example/clusterstack/xr-eks.yaml) | An EKS tier whose manifest-only `nodewright-customizations` component renders its Skyhook tuning CR into a provider-kubernetes `Object` |
+| [xr.yaml](example/clusterstack/xr.yaml) | An `h100` / `kind` / `training` stack: `prometheus-operator-crds` renders first, `cert-manager` once it is observed `Ready` |
+| [xr-eks.yaml](example/clusterstack/xr-eks.yaml) | An EKS tier whose manifest-only `nodewright-customizations` component renders its NodeWright tuning CR into a provider-kubernetes `Object` |
 | [schemas/](example/clusterstack/schemas/) | Hand-written stand-ins for the `Release` and `Object` CRD schemas that `crossplane render --required-schemas` needs, and how to replace them with the real ones |
 
 See the [example README](example/clusterstack/README.md) for setup
@@ -365,8 +370,8 @@ $ crossplane xpkg build -f package --embed-runtime-image=runtime
 `go generate ./...` regenerates the `Input` CRD under `package/input/` and the
 golden fixtures under `test-fixtures/want/` — the function's own output for
 the hand-written request fixtures, pinning the exact charts, versions and
-values the embedded recipes resolve to. After bumping `github.com/NVIDIA/aicr`,
-run it and review the diff under `test-fixtures/want/`: it is exactly what
+values the embedded recipes resolve to. After bumping `aicr.run`, run it and
+review the diff under `test-fixtures/want/`: it is exactly what
 the function will now deploy. `TestCatalogInvariants` resolves every leaf
 recipe of the embedded catalog and checks the properties the function relies
 on across all of them, so a bump that breaks one fails with the leaf and

@@ -8,7 +8,7 @@ spec:
     chart:
       name: gpu-operator
       repository: https://helm.ngc.nvidia.com/nvidia
-      version: v26.3.3
+      version: v26.7.2
     namespace: gpu-operator
     values:
       ccManager:
@@ -31,10 +31,10 @@ spec:
         env: []
       driver:
         enabled: false
+        kernelModuleType: auto
         maxParallelUpgrades: 5
         rdma:
           enabled: false
-        useOpenKernelModules: true
         version: 580.173.02
       fullnameOverride: gpu-operator
       gdrcopy:

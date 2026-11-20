@@ -8,6 +8,8 @@ providerConfigRef:
   kind: ClusterProviderConfig
   name: gpu-cluster
 skipComponents:
+- name: dra-node-labeler
+- name: nktp
 - name: nfd
 - name: network-operator
 - name: nodewright-operator

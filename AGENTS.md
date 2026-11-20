@@ -19,14 +19,14 @@ The main goal is to make an AICR recipe a **continuously reconciled Crossplane A
 
 ### Relationship to AICR
 
-AICR (`github.com/NVIDIA/aicr`) is a CLI, API server and Go library that resolves recipes and renders them into Helm, Argo CD, Flux or Helmfile bundles. Function-AICR embeds AICR's recipe engine (`pkg/recipe`) and catalog and adapts the deployment to Crossplane:
+AICR (`github.com/NVIDIA/aicr`, Go module `aicr.run`) is a CLI, API server and Go library that resolves recipes and renders them into Helm, Argo CD, Flux or Helmfile bundles. Function-AICR embeds AICR's recipe engine (`pkg/recipe`) and catalog and adapts the deployment to Crossplane:
 
 | AICR CLI / bundler | Function-AICR |
 |--------------------|---------------|
 | Criteria on the command line | Criteria in the function `Input`, or on the observed XR via field paths |
 | Renders a bundle for an external deployer to apply once | Returns desired `Release`s and `Object`s to Crossplane, which reconciles them continuously |
 | Deployment order left to the deployer's tooling (Argo waves, Helmfile needs, ...) | Enforced by a gate that reads the providers' observed `Ready` conditions |
-| Reads recipe data from its embedded FS or an OCI source | Reads the embedded FS of the pinned `github.com/NVIDIA/aicr` module version; the `--recipe-oci-*` flags overlay it with a digest-pinned OCI recipe artifact pulled once at startup |
+| Reads recipe data from its embedded FS or an OCI source | Reads the embedded FS of the pinned `aicr.run` module version; the `--recipe-oci-*` flags overlay it with a digest-pinned OCI recipe artifact pulled once at startup |
 
 The pinned module version **is** the recipe catalog version. Bumping it changes what the function deploys (see [Bumping the AICR module](#bumping-the-aicr-module)).
 
@@ -87,7 +87,7 @@ internal/compose/                 Builds the composed resources (map[string]any)
     ↓
 internal/schema/                  Validator: compile a required schema once, Validate many
     ↓
-github.com/NVIDIA/aicr/pkg/recipe Builder, DataProvider, RecipeResult, ComponentRef,
+aicr.run/pkg/recipe               Builder, DataProvider, RecipeResult, ComponentRef,
                                   ResolveLeaves (tests), GetManifestContentWithContext
 ```
 
@@ -152,7 +152,7 @@ The user-facing field reference lives in `README.md` ("Input reference"); keep i
 
 ### The recipe source
 
-The recipe catalog is function-level configuration, not part of the `Input`: by default the FS embedded in the pinned `github.com/NVIDIA/aicr` module, optionally overlaid with a digest-pinned OCI recipe artifact via the `--recipe-oci-repository` / `--recipe-oci-digest` flags (`RECIPE_OCI_REPOSITORY` / `RECIPE_OCI_DIGEST`). `newDataProvider` (main.go) pulls the artifact **once at startup** through `aicr/pkg/recipe/ocisource` — never per request, so no reconcile waits on a registry — and a pull failure exits the process rather than falling back to embedded data. `ociPullOptions` requires both flags together and an immutable `sha256:` manifest digest (AICR refuses to materialize tag-selected artifacts anyway). The overlay's `repository@digest` identity is threaded through `Function.recipeSource` into the summary. Registry credentials come from the Docker config (`DOCKER_CONFIG`), connections are HTTPS-only, and extraction needs a writable temp dir (`TMPDIR`); see the README's "Recipe source" section for the deployment wiring.
+The recipe catalog is function-level configuration, not part of the `Input`: by default the FS embedded in the pinned `aicr.run` module, optionally overlaid with a digest-pinned OCI recipe artifact via the `--recipe-oci-repository` / `--recipe-oci-digest` flags (`RECIPE_OCI_REPOSITORY` / `RECIPE_OCI_DIGEST`). `newDataProvider` (main.go) pulls the artifact **once at startup** through `aicr/pkg/recipe/ocisource` — never per request, so no reconcile waits on a registry — and a pull failure exits the process rather than falling back to embedded data. `ociPullOptions` requires both flags together and an immutable `sha256:` manifest digest (AICR refuses to materialize tag-selected artifacts anyway). The overlay's `repository@digest` identity is threaded through `Function.recipeSource` into the summary. Registry credentials come from the Docker config (`DOCKER_CONFIG`), connections are HTTPS-only, and extraction needs a writable temp dir (`TMPDIR`); see the README's "Recipe source" section for the deployment wiring.
 
 ### Criteria and provider-config resolution
 
@@ -303,13 +303,13 @@ Configuration is `.golangci.yml` (golangci-lint v2, the version CI pins is in `.
 
 ### Bumping the AICR Module
 
-The `github.com/NVIDIA/aicr` version is the recipe catalog version. A bump is a **minor release** from `main` (see `/cut-release`), never a patch.
+The `aicr.run` version is the recipe catalog version (AICR renamed its Go module from `github.com/NVIDIA/aicr` in v1.3.0). A bump is a **minor release** from `main` (see `/cut-release`), never a patch.
 
-1. `go get github.com/NVIDIA/aicr@vX.Y.Z && go mod tidy`
+1. `go get aicr.run@vX.Y.Z && go mod tidy`
 2. `go test ./...` — `TestRunFunction` fails wherever recipe content changed; `TestCatalogInvariants` fails, naming the leaf and component, wherever a recipe's *shape* broke an assumption (a manifest that no longer renders, a name collision, a dependency edge into a component the gate cannot see)
 3. `go generate ./...` and **review the diff under `test-fixtures/want/`** — it is exactly what the function will now deploy. Commit it with the bump.
 4. Re-render the examples (`example/clusterstack/README.md`) for both XRs
-5. Fix behaviour changes by hand: the static parts of each response are asserted in code, not regenerated
+5. Fix behaviour changes by hand: the static parts of each response are asserted in code, not regenerated. A component the catalog adds joins every `TestRunFunction` fixture that does not list it under `skipComponents`; add it there to keep the pinned tier small
 
 Since aicr v0.19.0 the resolver enforces a coverage post-condition: every stated dimension must be honored by an applied overlay. Do not reintroduce client-side defaults (e.g. `os: ubuntu`) or cross-field rules — leave unresolved dimensions unstated and let AICR answer.
 
@@ -345,7 +345,7 @@ crossplane render xr.yaml composition.yaml functions.yaml \
 
 | Package | Purpose |
 |---------|---------|
-| `github.com/NVIDIA/aicr` | Recipe engine (`pkg/recipe`), manifest renderer (`pkg/manifest`) and the embedded catalog; its version is what the function deploys |
+| `aicr.run` | Recipe engine (`pkg/recipe`), manifest renderer (`pkg/manifest`) and the embedded catalog; its version is what the function deploys |
 | `github.com/crossplane/function-sdk-go` | Crossplane function SDK (request/response helpers, required schemas) |
 | `github.com/crossplane/crossplane-runtime/v2` | `fieldpath.Paved` for XR field paths |
 | `github.com/crossplane/crossplane/apis/v2` | Condition types (`xpv2.TypeReady`) |
@@ -369,7 +369,7 @@ AICR's catalog decides which combinations exist. Unstated dimensions select the 
 
 ### `recipeVersion` Comes From Build Info
 
-`main.go` reads the `github.com/NVIDIA/aicr` module version from `debug.ReadBuildInfo()` (honoring a `replace`) and injects it into `Function`; test binaries carry no module list, so tests pin `testRecipeVersion`. `moduleVersion(bi, path)` is the pure, testable helper.
+`main.go` reads the `aicr.run` module version from `debug.ReadBuildInfo()` (honoring a `replace`) and injects it into `Function`; test binaries carry no module list, so tests pin `testRecipeVersion`. `moduleVersion(bi, path)` is the pure, testable helper.
 
 ### Manifest Files Are Rendered With AICR's Renderer
 
@@ -390,14 +390,14 @@ AICR's pull budget is minutes (staging, digest authorization, extraction) while 
 - `input/v1beta1/input.go` — authoritative Input schema
 - `test-fixtures/generate.go` — how the goldens are produced
 - `.claude/skills/cut-release/SKILL.md` — cutting a minor/major release (`release-X.Y` branch, tag, package publish); one release branch is kept at a time
-- `.claude/skills/remediate-cves/SKILL.md` — patch releases for Grype/code-scanning findings against the latest release; never bumps `github.com/NVIDIA/aicr`
+- `.claude/skills/remediate-cves/SKILL.md` — patch releases for Grype/code-scanning findings against the latest release; never bumps `aicr.run`
 
 ## Releasing
 
 Releases are driven by two skills; use them rather than improvising the branch/tag/publish sequence:
 
 - **`/cut-release`** — a new minor or major version from `main` HEAD: new `release-X.Y` branch, tag (`.github/workflows/tag.yml`), GitHub release, package publish (`publish-pkg.yml` → `ghcr.io/jonasz-lasut/function-aicr`, mirrored to `xpkg.upbound.io/jonasz-lasut/function-aicr`), signing/attestation (`supplychain.yml`). The bump size is the user's choice, never inferred. An aicr module bump always ships this way.
-- **`/remediate-cves`** — a patch release on the current `release-X.Y` branch for CVEs found by `grype-scan.yml` (weekly against the latest release). It never bumps `github.com/NVIDIA/aicr`.
+- **`/remediate-cves`** — a patch release on the current `release-X.Y` branch for CVEs found by `grype-scan.yml` (weekly against the latest release). It never bumps `aicr.run`.
 
 ## Troubleshooting
 
@@ -420,6 +420,10 @@ Y is not reaching `Ready` in the target cluster (check the `Release`/`Object` in
 ### "cannot pull the OCI recipe source …" at startup
 
 The function exits (and the pod crashloops) when the `--recipe-oci-*` source cannot be pulled or validated. `--recipe-oci-digest` must be the artifact's immutable `sha256:` manifest digest, not a tag. An auth error means the Docker config (`DOCKER_CONFIG`) lacks credentials for the registry; a TLS error means the registry's CA is not in the trust store (`SSL_CERT_FILE`); "invalid materialized OCI recipe catalog" means the artifact is not a recipe tree rooted at `registry.yaml`. There is deliberately no fallback to the embedded catalog.
+
+### "this recipe ships torch-distributed-tcpxo and requires configuration.gke.tcpxoInterfaces"
+
+The `h100` / `gke` / `cos` / `training` / `kubeflow` recipe needs a GKE TCPXO interface mapping (`recipe.WithGKETCPXOInterfaces`), a typed generation-time input the `Input` has no field for. The function is Fatal for that recipe; `TestCatalogInvariants` resolves it with AICR's introspection mapping so its shape stays covered.
 
 ### "no recipe provides os 'ubuntu' for criteria(…)" / "invalid AICR recipe criteria"
 

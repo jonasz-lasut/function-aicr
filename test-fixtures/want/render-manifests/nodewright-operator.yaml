@@ -8,15 +8,15 @@ spec:
     chart:
       name: nodewright
       repository: oci://ghcr.io/nvidia/nodewright/charts
-      version: v0.17.1
-    namespace: skyhook
+      version: v0.21.0
+    namespace: nodewright
     values:
       controllerManager:
         manager:
           resources:
             limits:
               cpu: 1000m
-              memory: 4000Mi
+              memory: 12Gi
             requests:
               cpu: 1000m
               memory: 2000Mi

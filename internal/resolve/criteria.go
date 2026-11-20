@@ -6,7 +6,7 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/fieldpath"
 	"github.com/crossplane/function-sdk-go/errors"
 
-	"github.com/NVIDIA/aicr/pkg/recipe"
+	"aicr.run/pkg/recipe"
 
 	"github.com/jonasz-lasut/function-aicr/input/v1beta1"
 )

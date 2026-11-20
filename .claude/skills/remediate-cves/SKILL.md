@@ -20,7 +20,7 @@ publish → sign. What ships is decided by the completeness gate in step 4.
   code-scanning findings tied to a release of this function.
 - **Not** for routine dependency bumps with no security alert behind them
   (that's ordinary `chore(deps)` / Renovate work).
-- **Not** for bumping `github.com/NVIDIA/aicr` — see the exception in step 3;
+- **Not** for bumping `aicr.run` — see the exception in step 3;
   an aicr bump is a minor release from `main` (`/cut-release`), never a patch.
 
 ## Procedure
@@ -58,7 +58,7 @@ what actually got fixed.
 
 ### 3. Remediate on the release branch
 
-**Exception — never bump `github.com/NVIDIA/aicr` here.** If a CVE's only
+**Exception — never bump `aicr.run` here.** If a CVE's only
 fix is a new version of aicr itself, do not `go get` it as part of this flow.
 Leave that CVE unremediated, keep going with everything else, and take it to
 the completeness gate in step 4. The aicr module pins the embedded recipe
@@ -119,7 +119,7 @@ Compare what got fixed against the full CVE list from step 2.
 
   ```
   WARNING - aicr bump required!
-  <CVE/GHSA ID> requires bumping github.com/NVIDIA/aicr to <fixed version>.
+  <CVE/GHSA ID> requires bumping aicr.run to <fixed version>.
   Not applied by this flow: an aicr bump changes the recipe catalog the
   function deploys. Bump it on main (go get, go generate ./..., review the
   test-fixtures/want diff and TestCatalogInvariants), then cut a minor
@@ -206,7 +206,7 @@ its warning block.
 
 ## Common mistakes
 
-- Bumping `github.com/NVIDIA/aicr` to close a CVE — that swaps the recipe
+- Bumping `aicr.run` to close a CVE — that swaps the recipe
   catalog the function deploys and belongs in a reviewed minor release from
   `main`, never on a security patch branch. Flag it and ship the rest.
 - Treating a vulnerable module *under* aicr as covered by the exception — it

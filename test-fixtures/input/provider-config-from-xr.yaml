@@ -11,6 +11,8 @@ providerConfigRefFrom:
   name: spec.providerConfigName
 skipDeploymentOrder: true
 skipComponents:
+- name: dra-node-labeler
+- name: nktp
 - name: nfd
 - name: network-operator
 - name: nodewright-operator

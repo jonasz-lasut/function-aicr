@@ -27,7 +27,7 @@ import (
 	"github.com/crossplane/function-sdk-go/resource/composed"
 	"github.com/crossplane/function-sdk-go/response"
 
-	"github.com/NVIDIA/aicr/pkg/recipe"
+	"aicr.run/pkg/recipe"
 
 	"github.com/jonasz-lasut/function-aicr/input/v1beta1"
 	"github.com/jonasz-lasut/function-aicr/internal/compose"
@@ -37,7 +37,7 @@ import (
 // update regenerates test-fixtures/want from the function's own output instead
 // of comparing against it. It is driven by `go generate ./...` (see
 // test-fixtures/generate.go); the resulting diff is what the function will
-// deploy after a github.com/NVIDIA/aicr bump, and deserves review.
+// deploy after a aicr.run bump, and deserves review.
 var update = flag.Bool("update", false, "regenerate test-fixtures/want from the function's output")
 
 const (
@@ -263,7 +263,7 @@ func TestRunFunction(t *testing.T) {
 			},
 		},
 		"RendersManifestsIntoObjects": {
-			reason: "A component's manifest files are Helm-style templates; they are rendered with the recipe's values and emitted as Objects — here the manifest-only nodewright-customizations' Skyhook CR next to nodewright-operator's Release — and the Object schema is required only because the recipe carries manifests.",
+			reason: "A component's manifest files are Helm-style templates; they are rendered with the recipe's values and emitted as Objects — here the manifest-only nodewright-customizations' NodeWright CR next to nodewright-operator's Release — and the Object schema is required only because the recipe carries manifests.",
 			args: args{
 				ctx: context.Background(),
 				req: &fnv1.RunFunctionRequest{
@@ -474,6 +474,23 @@ func TestRunFunction(t *testing.T) {
 				},
 			},
 		},
+		"FatalWhenRecipeNeedsConfiguration": {
+			reason: "A recipe that requires a typed generation-time input the Input cannot carry (the GKE TCPXO interface mapping) fails with AICR's own message rather than deploying a runtime without its networks.",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:     meta(),
+					Input:    yamlToProto("input/needs-recipe-configuration.yaml"),
+					Observed: &fnv1.State{Composite: fixture("observed/xr.yaml")},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta:    respMeta,
+					Results: fatal("cannot resolve AICR recipe: [INVALID_REQUEST] this recipe ships torch-distributed-tcpxo and requires configuration.gke.tcpxoInterfaces; supply --gke-tcpxo-interfaces eth1=<network>,...,eth8=<network> or spec.recipe.configuration.gke.tcpxoInterfaces"),
+				},
+			},
+		},
 		"FatalWhenTargetNotUnderStatus": {
 			reason: "Writing outside status would corrupt the desired composite's spec.",
 			args: args{
@@ -594,11 +611,11 @@ func TestRunFunction(t *testing.T) {
 // TestCatalogInvariants resolves every leaf recipe of the embedded AICR
 // catalog through the function's own building blocks and asserts the
 // properties the function relies on but TestRunFunction — which pins the
-// content of a single, manifest-free tier — cannot see. An AICR bump that ships
-// a manifest that does not render, two documents that map to the same Object
-// name, a disabled component in the deployment order, a dependency on a
-// component that is not in the recipe, or a dependency graph the gate can
-// never drain fails here, not in a cluster.
+// content of a single tier that composes no Object — cannot see. An AICR bump
+// that ships a manifest that does not render, two documents that map to the
+// same Object name, a disabled component in the deployment order, a
+// dependency on a component that is not in the recipe, or a dependency graph
+// the gate can never drain fails here, not in a cluster.
 func TestCatalogInvariants(t *testing.T) {
 	ctx := context.Background()
 	dp := embeddedDataProvider()
@@ -629,7 +646,16 @@ func TestCatalogInvariants(t *testing.T) {
 			}
 
 			// The function's own resolution path, without a snapshot evaluator.
-			res, err := recipe.NewBuilder(recipe.WithVersion(testRecipeVersion), recipe.WithDataProvider(dp)).BuildFromCriteria(ctx, criteria)
+			builder := recipe.NewBuilder(recipe.WithVersion(testRecipeVersion), recipe.WithDataProvider(dp))
+			res, err := builder.BuildFromCriteria(ctx, criteria)
+			if recipe.IsMissingGKETCPXOInterfaces(err) {
+				// The one leaf family with a required typed input: a GKE
+				// network mapping the Input cannot carry, so RunFunction is
+				// Fatal for it (FatalWhenRecipeNeedsConfiguration). Resolve
+				// it with AICR's fixed introspection mapping, as its own
+				// leaf enumeration does, so the leaf's shape stays covered.
+				res, err = builder.BuildFromCriteria(ctx, criteria, recipe.WithGKETCPXOInterfaces(recipe.GKETCPXOIntrospectionInterfaces()))
+			}
 			if err != nil {
 				t.Fatalf("BuildFromCriteria(%s): %v", criteria, err)
 			}
@@ -751,7 +777,7 @@ func TestCatalogInvariants(t *testing.T) {
 }
 
 // TestGate exercises the gate directly. The embedded "kind" recipe used by
-// TestRunFunction carries no manifest files, and its gate cases only ever place
+// TestRunFunction composes no Objects, and its gate cases only ever place
 // the dependency (cert-manager) in observed, never the dependent itself; so
 // neither the pre-/post-manifest waves nor the "never gate something already
 // created" guards have coverage there. The gate withholds resources by deleting

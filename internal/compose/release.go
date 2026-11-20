@@ -4,7 +4,7 @@ import (
 	"maps"
 	"strings"
 
-	"github.com/NVIDIA/aicr/pkg/recipe"
+	"aicr.run/pkg/recipe"
 )
 
 // The composed provider-helm Release GVK. Namespaced, so it can be composed by

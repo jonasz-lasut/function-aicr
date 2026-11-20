@@ -11,6 +11,8 @@ providerConfigRef:
   name: gpu-cluster
 skipDeploymentOrder: true
 skipComponents:
+- name: dra-node-labeler
+- name: nktp
 - name: aws-ebs-csi-driver
 - name: aws-efa
 - name: cert-manager

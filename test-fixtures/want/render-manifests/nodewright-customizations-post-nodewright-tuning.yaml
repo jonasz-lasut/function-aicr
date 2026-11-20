@@ -2,12 +2,12 @@
 apiVersion: kubernetes.m.crossplane.io/v1alpha1
 kind: Object
 metadata:
-  name: nodewright-customizations-post-skyhook-tuning
+  name: nodewright-customizations-post-nodewright-tuning
 spec:
   forProvider:
     manifest:
-      apiVersion: skyhook.nvidia.com/v1alpha1
-      kind: Skyhook
+      apiVersion: nodewright.nvidia.com/v1alpha1
+      kind: NodeWright
       metadata:
         annotations:
           aicr/skip-hook-validation: "true"
@@ -17,19 +17,22 @@ spec:
           app.kubernetes.io/part-of: skyhook-operator
           helm.sh/chart: nodewright-customizations-0.1.0
         name: tuning
-        namespace: skyhook
+        namespace: nodewright
       spec:
         additionalTolerations:
         - operator: Exists
         autoTaintNewNodes: true
+        interruptionBudget:
+          count: 1
         packages:
           nvidia-setup-full:
             configMap:
               accelerator: h100
               service: eks
-            containerSHA: sha256:f3994267c9b5e62fb7720012dcd4d473fc2f8474f4276e203bba842c970307ad
+            containerSHA: sha256:090b17713059b9d2a96a6eecb7540c98ec7f4603eaa9f9f3d5514b87b7c13e0d
             dependsOn:
-              nvidia-tuned: 0.3.2
+              nvidia-setup-kernel: 0.10.0
+              nvidia-tuned: 0.11.1
             env:
             - name: NVIDIA_SETUP_INSTALL_KERNEL
               value: "false"
@@ -41,39 +44,41 @@ spec:
               cpuRequest: 4
               memoryLimit: 16Gi
               memoryRequest: 8Gi
-            version: 0.5.0
+            version: 0.10.0
           nvidia-setup-kernel:
             configMap:
               accelerator: h100
               service: eks
-            containerSHA: sha256:f3994267c9b5e62fb7720012dcd4d473fc2f8474f4276e203bba842c970307ad
+            containerSHA: sha256:090b17713059b9d2a96a6eecb7540c98ec7f4603eaa9f9f3d5514b87b7c13e0d
             env:
             - name: NVIDIA_SETUP_INSTALL_KERNEL
               value: "true"
             - name: NVIDIA_SETUP_KERNEL_ALLOW_NEWER
               value: "false"
             image: ghcr.io/nvidia/nodewright-packages/nvidia-setup
+            interrupt:
+              type: reboot
             resources:
-              cpuLimit: 4
-              cpuRequest: 2
-              memoryLimit: 8Gi
-              memoryRequest: 4Gi
-            version: 0.5.0
+              cpuLimit: 8
+              cpuRequest: 4
+              memoryLimit: 16Gi
+              memoryRequest: 8Gi
+            version: 0.10.0
           nvidia-tuned:
             configMap:
               accelerator: h100
               intent: multiNodeTraining
               service: eks
-            containerSHA: sha256:a8bdca40dbe36de9d7a13e6afada49870714784fd9a3b9ce08717d675978c2b6
+            containerSHA: sha256:d70ce00c80181d8fdeab29941a8370aced758aa6a9db9afdc5c095b6a142032a
             dependsOn:
-              nvidia-setup-kernel: 0.5.0
+              nvidia-setup-kernel: 0.10.0
             env:
             - name: INTERRUPT
               value: "true"
             image: ghcr.io/nvidia/nodewright-packages/nvidia-tuned
             interrupt:
               type: reboot
-            version: 0.3.2
+            version: 0.11.1
         runtimeRequired: true
   providerConfigRef:
     kind: ClusterProviderConfig

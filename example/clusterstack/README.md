@@ -21,12 +21,12 @@ crossplane render xr.yaml composition.yaml functions.yaml \
 
 Gating is on and nothing is observed, so only the dependency-free components
 appear. That is correct, not a bug: rerun with `--observed-resources` marking
-`cert-manager` Ready to see `gpu-operator` emitted.
+`prometheus-operator-crds` Ready to see `cert-manager` emitted.
 
 `xr-eks.yaml` selects an EKS tier that also carries manifest files: the
-manifest-only `nodewright-customizations` component renders its Skyhook tuning
-CR into a provider-kubernetes `Object`, so the function requires the `Object`
-schema as well and `schemas/` supplies it:
+manifest-only `nodewright-customizations` component renders its NodeWright
+tuning CR into a provider-kubernetes `Object`, so the function requires the
+`Object` schema as well and `schemas/` supplies it:
 
 ```shell
 crossplane render xr-eks.yaml composition.yaml functions.yaml \
