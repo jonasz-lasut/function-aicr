@@ -1,0 +1,16 @@
+# Replaces the stock overlay of the same name. The recipe adds e2e-checked,
+# the one component whose registry entry declares a bundle check.
+kind: RecipeMetadata
+apiVersion: aicr.run/v1beta1
+metadata:
+  name: kind-inference
+spec:
+  base: kind
+  criteria:
+    service: kind
+    intent: inference
+  componentRefs:
+    - name: e2e-checked
+      type: Helm
+      source: oci://registry.e2e.svc:5443/charts
+      valuesFile: components/e2e-checked/values.yaml

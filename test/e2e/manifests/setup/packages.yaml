@@ -1,0 +1,89 @@
+# The packages the suite composes with: provider-helm and provider-kubernetes
+# for the Releases and Objects function-aicr emits, and function-auto-ready
+# for the pipeline's last step. Each provider runs as a service account bound
+# to cluster-admin, so its in-cluster identity can install into the kind
+# cluster itself (provider-configs.yaml). provider-helm also trusts the
+# registry's CA, where the suite's charts are. The versions are substituted
+# by `make e2e.setup`.
+apiVersion: pkg.crossplane.io/v1beta1
+kind: DeploymentRuntimeConfig
+metadata:
+  name: provider-helm-e2e
+spec:
+  deploymentTemplate:
+    spec:
+      selector: {}
+      template:
+        spec:
+          containers:
+          - name: package-runtime
+            # provider-helm marks a Release unready when it starts an upgrade
+            # and looks at it again at its next poll, ten minutes later by
+            # default. The suite would spend that time waiting after every
+            # change to a deployed release.
+            args:
+            - --poll=30s
+            env:
+            - name: SSL_CERT_DIR
+              value: /etc/ssl/certs:/etc/function-aicr/registry-ca
+            volumeMounts:
+            - name: registry-ca
+              mountPath: /etc/function-aicr/registry-ca
+              readOnly: true
+          volumes:
+          - name: registry-ca
+            configMap:
+              name: e2e-registry-ca
+  serviceAccountTemplate:
+    metadata:
+      name: provider-helm-e2e
+---
+apiVersion: pkg.crossplane.io/v1beta1
+kind: DeploymentRuntimeConfig
+metadata:
+  name: provider-kubernetes-e2e
+spec:
+  serviceAccountTemplate:
+    metadata:
+      name: provider-kubernetes-e2e
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: e2e-providers-cluster-admin
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- kind: ServiceAccount
+  name: provider-helm-e2e
+  namespace: crossplane-system
+- kind: ServiceAccount
+  name: provider-kubernetes-e2e
+  namespace: crossplane-system
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-helm
+spec:
+  package: xpkg.crossplane.io/crossplane-contrib/provider-helm:PROVIDER_HELM_VERSION
+  runtimeConfigRef:
+    name: provider-helm-e2e
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-kubernetes
+spec:
+  package: xpkg.crossplane.io/crossplane-contrib/provider-kubernetes:PROVIDER_KUBERNETES_VERSION
+  runtimeConfigRef:
+    name: provider-kubernetes-e2e
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Function
+metadata:
+  name: function-auto-ready
+spec:
+  package: xpkg.crossplane.io/crossplane-contrib/function-auto-ready:FUNCTION_AUTO_READY_VERSION

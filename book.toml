@@ -1,0 +1,28 @@
+# The documentation site (https://jonasz-lasut.github.io/function-aicr/),
+# built by mdBook from docs/. docs/SUMMARY.md is the table of contents:
+# mdBook renders only the pages listed there. .github/workflows/docs.yml
+# builds it on every pull request that touches it and deploys main to
+# GitHub Pages.
+[book]
+title = "function-aicr"
+description = "A Crossplane composition function that deploys an NVIDIA AI Cluster Runtime recipe as provider-helm Releases and provider-kubernetes Objects"
+authors = ["The function-aicr Authors"]
+language = "en"
+src = "docs"
+
+[build]
+build-dir = "book"
+
+[output.html]
+site-url = "/function-aicr/"
+git-repository-url = "https://github.com/jonasz-lasut/function-aicr"
+edit-url-template = "https://github.com/jonasz-lasut/function-aicr/edit/main/{path}"
+# A cream page with a green accent that alludes to NVIDIA's, at a lower
+# brightness (docs/theme/aicr.css overrides the built-in themes' CSS
+# variables; no forked theme).
+default-theme = "light"
+preferred-dark-theme = "navy"
+additional-css = ["docs/theme/aicr.css"]
+
+[output.html.search]
+limit-results = 20

@@ -51,11 +51,16 @@ Crossplane RunFunctionRequest
 │  5. managedComponents: enabled, not skipped, Helm-typed refs         │
 │     (Warnings for skip/override names that match nothing)            │
 │  6. resolveValues: effective values per component                    │
+│     stack.applyNodeScheduling (nodeScheduling): selectors and        │
+│     tolerations at the registry's paths                              │
 │     stack.wireDRAEviction (draEviction): the three-chart contract    │
 │     stack.keepNamespaces: a deployed Release keeps its namespace     │
 │  7. stack.renderObjects: per component, per wave (pre/post):         │
 │       manifest file → RenderManifest → SplitManifests →              │
 │       ManifestObjectName → NewObject → rendered                      │
+│     stack.requireNodeSelectors + checks.Run (AICR's bundle checks)   │
+│     → stack.refuse: Fatal for a component that is not deployed yet,  │
+│     Warning for one that is                                          │
 │  8. stack.needs → RequireSchema("release") / ("object") as needed    │
 │     composedKind.validator: not yet resolved → return with no        │
 │     resources; resolved to nil → Fatal "is provider-… installed?"    │
@@ -86,13 +91,17 @@ internal/resolve/                 static Input + observed XR → the resolved In
     ├── input.go                  Input(): static Input + overlay, strict decoding
     ├── criteria.go               Criteria(): ≥1 dimension
     ├── selection.go              Profile(): one name=value; BuildOptions(): configuration
+    ├── scheduling.go             NodeScheduling(): AICR validates labels and tolerations
     └── providerconfig.go         ProviderConfigRef(): kind enum, name required
     ↓
 internal/compose/                 Builds the composed resources (map[string]any)
     ├── release.go                NewRelease, Override, effective(), SplitChart, MergeValues
     ├── manifest.go               RenderManifest via aicr/pkg/manifest.Render
+    ├── scheduling.go             ApplyNodeScheduling, RequireNodeSelectors: a copy of the bundler's pass
     ├── draeviction.go            WireDRAEviction: a copy of the bundler's eviction wiring
     └── object.go                 SplitManifests, ManifestObjectName, NewObject
+    ↓
+internal/checks/                  Run AICR's registry-declared bundle checks (checks.Config, checks.Run)
     ↓
 internal/schema/                  Validator: compile a required schema once, Validate many
     ↓
@@ -115,6 +124,7 @@ function-aicr/
 ├── internal/
 │   ├── resolve/             # Input overlay from the XR, criteria and provider config
 │   ├── compose/             # Release/Object builders, manifest rendering, value merging
+│   ├── checks/              # AICR's bundle checks, run with AICR's own functions
 │   └── schema/              # OpenAPI v3 validation of composed resources
 │
 ├── test-fixtures/
@@ -127,10 +137,16 @@ function-aicr/
 ├── package/
 │   ├── crossplane.yaml      # Function package metadata
 │   └── input/               # GENERATED Input CRD
+├── test/e2e/                # End-to-end suite: its own Go module, on crossplane/crossplane's e2e framework
+├── Makefile                 # The end-to-end cluster (make e2e.up / e2e.test / e2e.down), nothing else
+├── build/                   # Submodule: crossplane/build, the Makefile's make library
+├── docs/                    # The documentation site's pages (mdBook; SUMMARY.md is the table of contents)
+├── book.toml                # mdBook configuration; docs/theme/aicr.css is the palette
+├── .vale.ini                # Vale prose lint over README.md, docs/ and the example and e2e READMEs
 ├── example/clusterstack/    # XRD, Composition, XRs, schema stand-ins, render walkthrough
 ├── extensions/icons/        # Package icon; supplychain.yml appends it, README.md and an SBOM to the mirror image
 ├── .claude/skills/          # cut-release, remediate-cves (release procedures)
-├── .github/workflows/       # ci (check-diff, lint, unit-test), publish-pkg, tag, grype-scan, supplychain
+├── .github/workflows/       # ci (check-diff, lint, unit-test), docs, e2e, publish-pkg, tag, grype-scan, supplychain
 ├── .github/renovate.json5   # Renovate: grouped bump PRs; aicr bumps wait for dependency-dashboard approval
 ├── .golangci.yml            # Lint configuration (golangci-lint v2)
 └── Dockerfile               # Distroless runtime image; Go version comes from go.mod
@@ -151,6 +167,7 @@ type Input struct {
     Profile               map[string]string            // one recipe variant, {gpuStack: dra}
     Configuration         *Configuration               // gke.tcpxoInterfaces, runtimeInventory.mode
     ProviderConfigRef     *ProviderConfigRef           // kind (enum, default ClusterProviderConfig) + name
+    NodeScheduling        *NodeScheduling              // system / accelerated: nodeSelector, tolerations
     DRAEviction           bool                         // wire AICR's DRA eviction contract
     SkipDeploymentOrder   bool                         // emit everything at once, no gate
     ComponentClasses      []string                     // core and/or ops; unset = every class
@@ -160,13 +177,13 @@ type Input struct {
 }
 ```
 
-The user-facing field reference lives in `README.md` ("Input reference"); keep it in sync with `input/v1beta1/input.go`.
+The user-facing field reference is `docs/operators/input-reference.md`; keep it in sync with `input/v1beta1/input.go`.
 
 ### The recipe source
 
-The recipe catalog is function-level configuration, not part of the `Input`: by default the FS embedded in the pinned `aicr.run` module, optionally overlaid with a digest-pinned OCI recipe artifact via the `--recipe-oci-repository` / `--recipe-oci-digest` flags (`RECIPE_OCI_REPOSITORY` / `RECIPE_OCI_DIGEST`). `newDataProvider` (main.go) pulls the artifact **once at startup** through `aicr/pkg/recipe/ocisource` — never per request, so no reconcile waits on a registry — and a pull failure exits the process rather than falling back to embedded data. `ociPullOptions` requires both flags together and an immutable `sha256:` manifest digest (AICR refuses to materialize tag-selected artifacts anyway). The overlay's `repository@digest` identity is threaded through `Function.recipeSource` into the summary. Registry credentials come from the Docker config (`DOCKER_CONFIG`), connections are HTTPS-only, and extraction needs a writable temp dir (`TMPDIR`); see the README's "Recipe source" section for the deployment wiring.
+The recipe catalog is function-level configuration, not part of the `Input`: by default the FS embedded in the pinned `aicr.run` module, optionally overlaid with a digest-pinned OCI recipe artifact via the `--recipe-oci-repository` / `--recipe-oci-digest` flags (`RECIPE_OCI_REPOSITORY` / `RECIPE_OCI_DIGEST`). `newDataProvider` (main.go) pulls the artifact **once at startup** through `aicr/pkg/recipe/ocisource` — never per request, so no reconcile waits on a registry — and a pull failure exits the process rather than falling back to embedded data. `ociPullOptions` requires both flags together and an immutable `sha256:` manifest digest (AICR refuses to materialize tag-selected artifacts anyway). The overlay's `repository@digest` identity is threaded through `Function.recipeSource` into the summary. Registry credentials come from the Docker config (`DOCKER_CONFIG`), connections are HTTPS-only, and extraction needs a writable temp dir (`TMPDIR`); see `docs/operators/recipe-source.md` for the deployment wiring.
 
-The recipe source is also the only way to opt in to one of AICR's opt-in mixins (the NVSentinel remediation steps, `nvsentinel-observability`, the `NVIDIADriver` wiring): a mixin applies only when an overlay lists it under `spec.mixins`, and no build option selects one. The README's "Opting in to a mixin" shows the two-file artifact. It was verified end to end on 2026-11-20 against a local TLS registry: a tarball pushed with `oras push <file>:application/vnd.oci.image.layer.v1.tar+gzip` is accepted, while the layer `oras` packs from a directory is refused with "OCI recipe layer contains an unsafe archive path component" because the archive has a `.` entry.
+The recipe source is also the only way to opt in to one of AICR's opt-in mixins (the NVSentinel remediation steps, `nvsentinel-observability`, the `NVIDIADriver` wiring): a mixin applies only when an overlay lists it under `spec.mixins`, and no build option selects one. `docs/operators/mixins.md` shows the two-file artifact. It was verified end to end on 2026-11-20 against a local TLS registry: a tarball pushed with `oras push <file>:application/vnd.oci.image.layer.v1.tar+gzip` is accepted, while the layer `oras` packs from a directory is refused with "OCI recipe layer contains an unsafe archive path component" because the archive has a `.` entry.
 
 ### Input resolution
 
@@ -174,7 +191,7 @@ Every field of the `Input` is static, the value all composite resources get, unl
 
 1. maps merge key by key, the overlay wins, static keys it does not set are kept
 2. a list replaces the static list whole
-3. a null or `""` counts as unset and keeps the static value (Kubernetes cannot tell `""` from omitted); under `componentOverrides.<component>.values` an empty string is a chart value like any other
+3. a null or `""` counts as unset and keeps the static value (Kubernetes cannot tell `""` from omitted); under `componentOverrides.<component>.values` an empty string is a chart value like any other, and in a `nodeScheduling` node selector it is a label's value
 4. a path absent from the XR → the static Input alone
 5. a path holding anything but an object, an overlay that sets `overlayFrom` (or `apiVersion`, `kind`, `metadata`), a field the Input does not have → error (Fatal), never a silent fallback
 
@@ -198,10 +215,28 @@ At least one criteria dimension must be set; every unset dimension is passed to 
 
 Composed resources are `map[string]any` (see Design Decisions), built in `internal/compose`:
 
-- **Release** (`helm.m.crossplane.io/v1beta1`) — one per chart-backed component, named after the component. `spec.forProvider.wait: true` always; chart repository/name from `SplitChart(source, EffectiveChart())`; namespace/version/values from `effective()` with the override applied.
+- **Release** (`helm.m.crossplane.io/v1beta1`) — one per chart-backed component, named after the component. `spec.forProvider.wait: true` always; chart repository/name from `SplitChart(source, EffectiveChart())`, which never trims the source: provider-helm joins the two for an OCI chart as AICR's deployers do, also when the source ends in the chart's name (`kai-scheduler` is at `oci://ghcr.io/kai-scheduler/kai-scheduler/kai-scheduler`; trimming it broke the pull until the KWOK tier found it); namespace/version/values from `effective()` with the override applied.
 - **Object** (`kubernetes.m.crossplane.io/v1alpha1`) — one per document of every `preManifestFiles` (wave `pre`) and `manifestFiles` (wave `post`) entry, named `ManifestObjectName(component, wave, doc, index)` = `<component>-<pre|post>-<kind>-<slugged name>` (or `<component>-<wave>-<index>` when a document has no kind/name). Manifest files are Go/Helm templates rendered with `aicr/pkg/manifest.Render` from the same effective namespace/chart/version/values as the Release, so an override cannot make them disagree.
 
+- **Namespace Object** - `stack.namespaceObject` adds `compose.NewNamespaceObject` to the `pre` wave of a component that renders pre-manifest documents, and of a manifest-only component that renders any, named as a Namespace document of the component's own would be (`<component>-pre-namespace-<namespace>`). AICR's bundler installs manifest files as a chart of their own with `--create-namespace`; without the equivalent a pre-manifest Object fails with `namespaces "..." not found` and its Release, which waits for it, is never emitted (the end-to-end suite found this). `managementPolicies: [Observe, Create]` makes the provider create a missing namespace and never update or delete one. A component whose manifest files declare the namespace (the Talos `talos-namespace.yaml` files) keeps its own Object.
+
 Names are pure functions of their inputs because the gate correlates observed against desired resources by name. This also means one composite per target namespace: two would claim the same names.
+
+### Node scheduling
+
+`nodeScheduling.system` and `nodeScheduling.accelerated` each hold a `nodeSelector` and `tolerations` (`corev1.Toleration`). `resolve.NodeScheduling` validates them with AICR's own `config.ValidateNodeSelector` / `config.ValidateTolerations`, and `stack.applyNodeScheduling` writes them into every managed component's values at the paths its registry entry lists (`ComponentConfig.GetSystemNodeSelectorPaths` and its three siblings). It runs right after `resolveValues`, before any override is merged, because the bundler applies its structured overrides (`--set-json`) after scheduling: a `componentOverrides` value wins.
+
+`compose.ApplyNodeScheduling` is a copy of the orchestration AICR's bundler keeps unexported (`applyNodeSchedulingOverrides`, `classifySchedulingPaths` and `applyTolerationPaths` in `aicr.run/pkg/bundler/bundler.go`), built on the helpers `aicr.run/pkg/component` exports. The policy comes from the recipe's inline overrides only (`ComponentRef.Overrides`), never from the values file: an empty value at a path opts it out, a non-empty one makes tolerations append, everything else is replaced, and a toleration path listed for both tiers gets `component.SharedTolerations`. Two deliberate differences from the CLI: nothing is defaulted (the CLI tolerates every taint when its flags are unset, which here would reschedule every running stack on a function upgrade), and the bundler's other inputs to the same pass (workload selector, workload gate, node count, storage class) are not implemented.
+
+`stack.requireNodeSelectors` then runs `compose.RequireNodeSelectors` on the values with the override merged: a registry entry with `requireNodeSelector` and no selector at a non-opted-out path is a blocking finding, as `validateRequiredNodeSelectors` fails a bundle. `stack.refuse` decides what a blocking finding does (see Bundle checks below). In aicr v1.3.0 that is `slinky-slurm`, `slurm-accounting-mariadb` and `nvsentinel-mongodb`, and 6 of the 81 leaves (the Slurm recipes for AKS, EKS and GKE) fail without a selector. `TestNodeSchedulingAcrossTheCatalog` applies both tiers to every leaf, requires the check to pass and the manifests to render, and fails if a registry entry starts to use `requireNodeSelectorIfStorageClassSet`, the conditional variant that is not ported.
+
+### Bundle checks
+
+AICR's registry declares `validations` per component (a function name, a severity, criteria conditions and a message), which the bundler runs before it writes a bundle. `internal/checks` runs them with AICR's own functions (`validations.RunValidations` from `aicr.run/pkg/bundler/validations`), so nothing is copied: `checks.Config` describes the request as the bundle configuration AICR's command line would build (`nodeScheduling` as the four scheduling options, `skipComponents` as `--set <component>:enabled=false`, `componentOverrides` values as typed overrides, `draEviction` as the eviction label), and `checks.Run` returns one `Finding` per result for the managed components, with the four scheduling flags in AICR's messages replaced by the Input fields. Nothing is defaulted in that configuration: the checks themselves know that an empty accelerated toleration list renders a wildcard.
+
+`stack.refuse` applies one rule to these findings and to the required node selectors: a blocking finding is Fatal for a component nothing of which is observed yet (`stack.isObserved`: its Release, or an Object of a manifest-only component), and a Warning ending in `is already deployed, so it is not refused` otherwise; a non-blocking finding is a Warning. A function or catalog upgrade therefore never freezes a running stack. It runs after `stack.renderObjects`, because a manifest-only component's Objects are what says it is deployed.
+
+A check's `conditions` also match a recipe that leaves the dimension unstated, so a recipe without a service is checked as if it could be any service. In aicr v1.3.0, with no `nodeScheduling`, five of the 81 leaves have a blocking finding: the four AKS recipes (`CheckWildcardAcceleratedToleration` on `nodewright-customizations`) and `gb300-oke-ubuntu-training` (`CheckAcceleratedSelectorMissing`). `TestBundleChecksAcrossTheCatalog` requires every leaf to be clean when both placements are stated with keyed tolerations, and at least one leaf to be refused without them, which is what fails if AICR changes how its checks read the configuration. AICR's checks log through `log/slog`; `main.go` raises that logger to error level unless `--debug` is set. `aicr.run/pkg/bundler/validations` is not a stable API.
 
 ### DRA eviction
 
@@ -272,6 +307,31 @@ go test -race ./...
 
 `TestRunFunction` (fn_test.go) is the end-to-end suite: hand-written request fixtures under `test-fixtures/{input,observed,desired}/`, static response parts (requirements, results, conditions) asserted in code, and the desired state compared against goldens under `test-fixtures/want/`. `TestCatalogInvariants` resolves every leaf recipe with `recipe.ResolveLeaves` and asserts shape, not content: every manifest renders and parses, no two documents share an Object name, every managed component is in `DeploymentOrder`, every dependency names a real component, and the gate drains the whole recipe when everything it emits turns Ready. `TestGate` drives `stack.gate` through hand-built managed/observed maps.
 
+### End-to-End Suite
+
+`test/e2e` runs the function as a control plane does: built from the tree, installed as a Function package in a kind cluster (`function-aicr-e2e-<profile>`, with a kubeconfig of its own at `_output/e2e/kubeconfig-<profile>` that the Makefile exports as `KUBECONFIG`, so no target and no feature can reach another cluster through the developer's current context) with Crossplane, provider-helm and provider-kubernetes (a `ClusterProviderConfig` named `e2e` on each, pointing at the kind cluster itself), function-auto-ready and an OCI registry at `registry.e2e.svc:5443`. `test/e2e/README.md` is the reference.
+
+The suite deploys a catalog of its own, `test/e2e/catalog`: one chart that starts a pause container (`charts/e2e-app`) and a recipe tree (`recipe/`) with three components, `e2e-first` (a chart), `e2e-second` (a chart that depends on it, with a pre-manifest and a post-manifest file) and `e2e-notes` (manifest-only, depends on `e2e-second`). `make e2e.catalog` pushes both to the registry and applies the function's runtime config with the recipe artifact's digest, so the function serves the catalog through `--recipe-oci-*`, the same path an operator's catalog takes. AICR layers it over the embedded catalog, so `recipe/overlays` replaces the stock `base`, `kind`, `kind-inference` and `monitoring-hpa` overlays, which the suite's criteria (`service: kind`; with `intent: training` a recipe that moves `e2e-first` to another namespace; with `intent: inference` a recipe that adds `e2e-checked`, whose registry entry declares AICR's `CheckAcceleratedSelectorMissing`) would otherwise also select. The check is on a component of its own and has no conditions: AICR applies a condition on a criteria dimension to every recipe that leaves the dimension unstated (`recipe.MatchesCriteriaField`), so a check conditioned on `intent` would also refuse the plain `service: kind` recipe. `TestEndToEndCatalog` (`e2e_catalog_test.go`, a unit test) resolves the three recipes through a layered provider and fails when an AICR bump adds a stock overlay that joins them: replace that overlay in the catalog too.
+
+```bash
+git submodule update --init   # crossplane/build, once
+make e2e.up                   # kind, Crossplane, providers, registry, the function from this tree
+make e2e.test                 # go test in test/e2e against that cluster
+make e2e.function             # rebuild and reinstall the function after a code change
+make e2e.catalog              # publish the catalog again after a change to it
+make e2e.down
+```
+
+Two things hold it together. The Makefile uses the make library of the `build` submodule (`controlplane.mk`, `local.xpkg.mk`) and adds what the library lacks for a Function package: `xpkg.build.function-aicr` and `local.xpkg.deploy.function.%`, which loads the image into the node and installs the package from Crossplane's cache with `packagePullPolicy: Never`. The suite is a Go module of its own (`test/e2e/go.mod`), so that importing `github.com/crossplane/crossplane/v2/test/e2e/config` and `.../funcs` does not pull Crossplane's dependency tree into the function's `go.mod`; `go test ./...` at the root never builds it.
+
+Write a feature the way crossplane/crossplane does: a `Test...` function handing `environment.Test` a `features.NewWithDescription(...)`, labelled with `LabelArea`, `LabelSize` and `config.LabelTestSuite` (a feature without the last is failed by `TestMain`), its manifests under `test/e2e/manifests/<area>/<feature>/` and applied with `funcs.ApplyResources`. The Makefile is for the end-to-end cluster only: building, testing, generating and linting stay plain Go commands.
+
+The recipe features (`recipe_test.go`) share one XRD and Composition (`manifests/recipe/setup`) and each creates one composite resource in `default`, one at a time, deleted in the foreground so the next feature does not find the same Helm releases. A feature controls readiness without touching the Release: `TestRolloutOrder` gives `e2e-first`'s pod a node selector no node matches and labels the node to let it through. `recipe_gate_test.go` covers the rest of the gate the same way: `TestRolloutSteps` holds `e2e-second` at each of its own steps (a `ResourceQuota` of zero ConfigMaps in its namespace keeps the pre-manifest Object from being created; a node selector keeps its Release unready), `TestSkipDeploymentOrder` and `TestSkippedDependency` cover the two opt-outs, and `TestLiveResourcesAreKept` covers the rule that nothing observed is withheld. provider-helm (v1.5.0, Helm v4 with the kstatus wait) waits for readiness only while it installs or upgrades: `Observe` reports a Release `Available` whenever the Helm release is `deployed` and matches the spec, so a pod that stops running later never makes a Release unready. The feature therefore pauses the Release (`crossplane.io/paused`) and writes `Ready=False` to its status itself. In the catalog profile Crossplane runs with `--circuit-breaker-burst=1000` (`CROSSPLANE_ARGS`): with the default burst of 100 a rollout opens the composite resource's watch circuit breaker within seconds and every further gate step waits up to 30 seconds. provider-helm runs with `--poll=30s` in both profiles (the repository owner's call, 2026-11-20): it marks a Release unready when it starts an upgrade and observes it again only at its next poll, 10 minutes later by default, so a feature that changes a deployed release would wait that long for the composite resource to be ready again.
+
+The suite has a second profile, `kwok` (`make e2e.up E2E_PROFILE=kwok`, `make e2e.test E2E_PROFILE=kwok`), on a cluster of its own: the function serves the embedded catalog and `TestStockRecipeOnSimulatedNodes` (`kwok_test.go`, test suite label `kwok`) deploys the EKS `h100` training recipe with its real charts onto nodes that KWOK simulates. `make e2e.kwok` applies the KWOK release at the Makefile's `KWOK_VERSION` (Renovate moves it) and the six nodes in `test/e2e/manifests/kwok/nodes.yaml`, which were rendered once from AICR v1.3.0's node template and EKS profiles (`kwok/templates/nodes/node.yaml.tmpl`, `kwok/profiles/eks`) and are plain manifests from then on: nothing is read from the module at run time. It also labels the real node `eks.amazonaws.com/compute-type=hybrid`, as AICR's lane does, which keeps the EBS CSI node plugin off it. The Composition under `manifests/kwok/setup` is a hand copy of what AICR's lane passes to `aicr bundle` (`kwok/scripts/validate-scheduling.sh`: the scheduling flags as `nodeScheduling`, the `conditional_sets` as `componentOverrides`), plus two skipped components: `nodewright-customizations` as in the lane, and `nktp`, whose operator webhook guards DELETE and so blocks the uninstall on simulated nodes. provider-helm waits for readiness where AICR's lane only checks scheduling, so a pod that tolerates every taint and lands on the real node has to be able to run there. The first run of this tier found that `SplitChart` broke the `kai-scheduler` chart reference.
+
+`.github/workflows/e2e.yml` runs the suite on request only. On a pull request that is by label: `e2e` runs every profile, `e2e:catalog` and `e2e:kwok` one each, and a pull request without one of them runs none; nothing runs on a push to `main` (decided by the repository owner on 2026-11-20: the suite is not a required check of the `protect-main` ruleset, and which pull requests need it is a judgment). A manual run from the Actions tab runs the catalog profile, with the kwok profile on its `kwok` input. Renovate labels its pull requests `e2e` and merges them itself (`platformAutomerge: false`), because GitHub's auto-merge waits only for the required checks and would merge before the suite had run. The `e2e` group (the Makefile's pins, the suite's Go module) and the submodule never automerge. The kwok profile runs at Crossplane's default circuit breaker settings, so its rollout has the pace an operator gets.
+
 ### Test Patterns
 
 Tests are table-driven with `map[string]struct` keyed by case name and single inline `args`/`want` structs:
@@ -310,6 +370,20 @@ Compare with `go-cmp` — `cmp.Diff(want, got)`, using `cmp.AllowUnexported` / `
 
 `go generate` visits only files with the `generate` build tag; do not build a standalone generator program for the goldens (it would force the code under test out of `package main`), and never build with `-tags generate` yourself. Test binaries carry no module list in build info, so `fn_test.go` pins `testRecipeVersion = "v0.0.0-test"` where `main.go` would read the real aicr version.
 
+### Documentation
+
+The documentation is an mdBook site built from `docs/` (`book.toml`; `docs/SUMMARY.md` lists the pages, and a page that is not listed is not rendered). `.github/workflows/docs.yml` builds it, checks its links and lints its prose on every pull request that touches it, and deploys `main` to GitHub Pages.
+
+```bash
+mdbook serve                 # preview at http://localhost:3000
+mdbook build                 # into book/ (gitignored)
+vale sync                    # fetch the style packages .vale.ini pins, once
+vale README.md example/clusterstack/README.md test/e2e/README.md docs
+lychee --offline --include-fragments --exclude-path book/404.html 'book/**/*.html' README.md
+```
+
+Any Vale alert fails CI, warnings included. Fix the prose rather than the configuration; `.vale.ini` turns a rule off only with the reason beside it, and `.vale/styles/config/vocabularies/Aicr/accept.txt` holds the project's terms. A change in behaviour is documented in the page that covers it, not in `README.md`, which is only the landing page (it is also what the package's mirror image publishes). The pages are written for a reader who has not seen the code: no first person, contractions, sentence-case headings, a short dash or a colon and never an em dash.
+
 ### Linting
 
 ```bash
@@ -333,7 +407,7 @@ Configuration is `.golangci.yml` (golangci-lint v2, the version CI pins is in `.
 2. `go generate ./...` — regenerates deepcopy and the CRD under `package/input/`
 3. Wire it in `fn.go`. The overlay can set the new field with no further code; declare it in the example XRD if a composite resource should control it
 4. Add a `test-fixtures/input/*.yaml` fixture and a `TestRunFunction` case; name a new golden if it changes desired state, then `go generate ./...` and review `test-fixtures/want/`
-5. Document it in the README's "Input reference" table
+5. Document it in `docs/operators/input-reference.md`, and in the page that covers its behaviour
 
 ### Bumping the AICR Module
 
@@ -343,8 +417,11 @@ The `aicr.run` version is the recipe catalog version (AICR renamed its Go module
 2. `go test ./...` — `TestRunFunction` fails wherever recipe content changed; `TestCatalogInvariants` fails, naming the leaf and component, wherever a recipe's *shape* broke an assumption (a manifest that no longer renders, a name collision, a dependency edge into a component the gate cannot see)
 3. `go generate ./...` and **review the diff under `test-fixtures/want/`** — it is exactly what the function will now deploy. Commit it with the bump.
 4. Re-render the examples (`example/clusterstack/README.md`) for both XRs
-5. Re-read the bundler's DRA eviction wiring: `injectDRAEvictionLabel` and its two helpers in `aicr.run/pkg/bundler/bundler.go`, plus `draNodeLabelerDropReason` for when the labeler applies. `compose.WireDRAEviction` is a hand copy of that logic. `TestDRAEvictionConstants` catches a renamed constant or a moved value path; a change in behaviour (a new component in the contract, a new condition, a different merge rule) only shows in the source, so diff those functions against the previous AICR version and port what changed
-6. Fix behaviour changes by hand: the static parts of each response are asserted in code, not regenerated. A component the catalog adds joins every `TestRunFunction` fixture that does not list it under `skipComponents`; add it there to keep the pinned tier small
+5. Run `TestBundleChecksAcrossTheCatalog` and `internal/checks`' tests with attention: they call `aicr.run/pkg/bundler/validations` and `aicr.run/pkg/bundler/config` directly, neither of which is a stable API, and a new check may read a bundle option `checks.Config` does not set yet
+6. Re-read the bundler's node scheduling pass: `applyNodeSchedulingOverrides`, `classifySchedulingPaths`, `applyTolerationPaths` and `validateRequiredNodeSelectors` in `aicr.run/pkg/bundler/bundler.go`, of which `compose.ApplyNodeScheduling` and `compose.RequireNodeSelectors` are hand copies. `TestNodeSchedulingAcrossTheCatalog` catches a registry entry that needs the unported storage class condition; a changed rule only shows in the source
+7. Re-read the bundler's DRA eviction wiring: `injectDRAEvictionLabel` and its two helpers in `aicr.run/pkg/bundler/bundler.go`, plus `draNodeLabelerDropReason` for when the labeler applies. `compose.WireDRAEviction` is a hand copy of that logic. `TestDRAEvictionConstants` catches a renamed constant or a moved value path; a change in behaviour (a new component in the contract, a new condition, a different merge rule) only shows in the source, so diff those functions against the previous AICR version and port what changed
+8. Label the bump's pull request `e2e`: the kwok profile then deploys a stock recipe from the new catalog. Compare `kwok/scripts/validate-scheduling.sh` with the Composition under `test/e2e/manifests/kwok/setup` when it fails: AICR adds a chart override there when a component stops coming up on simulated nodes. The nodes in `test/e2e/manifests/kwok/nodes.yaml` do not follow the module; re-render them if AICR's EKS node profiles change in a way the recipe depends on
+9. Fix behaviour changes by hand: the static parts of each response are asserted in code, not regenerated. A component the catalog adds joins every `TestRunFunction` fixture that does not list it under `skipComponents`; add it there to keep the pinned tier small
 
 Since aicr v0.19.0 the resolver enforces a coverage post-condition: every stated dimension must be honored by an applied overlay. Do not reintroduce client-side defaults (e.g. `os: ubuntu`) or cross-field rules — leave unresolved dimensions unstated and let AICR answer.
 
@@ -428,7 +505,8 @@ AICR's pull budget is minutes (staging, digest authorization, extraction) while 
 
 ## Key Reference Documents
 
-- `README.md` — user-facing behaviour, the Input reference, the required-schemas contract and gating rules
+- `docs/` — the documentation site (https://jonasz-lasut.github.io/function-aicr/): user-facing behaviour, the Input reference, the required-schemas contract, gating rules, upgrades and troubleshooting
+- `README.md` — the landing page: the pitch, a quick start and links into the site
 - `example/clusterstack/README.md` — `crossplane render` walkthrough and the `--required-schemas` format
 - `input/v1beta1/input.go` — authoritative Input schema
 - `test-fixtures/generate.go` — how the goldens are produced

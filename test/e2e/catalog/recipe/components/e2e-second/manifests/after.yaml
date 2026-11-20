@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: e2e-second-after
+  namespace: {{ .Release.Namespace }}
+data:
+  chart: {{ .Chart.Name }}-{{ .Chart.Version }}

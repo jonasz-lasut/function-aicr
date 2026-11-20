@@ -73,3 +73,29 @@ func NewObject(manifest map[string]any, name string, pcRef ProviderConfigRef) ma
 		},
 	}
 }
+
+// NamespaceObjectName returns the name of the Object that makes a component's
+// namespace exist ahead of its manifests in a wave. It is the name a
+// Namespace document in the component's own manifest files gets, so a recipe
+// that declares the namespace itself is recognized by it.
+func NamespaceObjectName(component, wave, namespace string) string {
+	return ManifestObjectName(component, wave, namespaceManifest(namespace), 0)
+}
+
+// NewNamespaceObject returns an Object that makes a namespace exist and
+// otherwise leaves it alone, as Helm's --create-namespace does: a namespace
+// that is already there is only observed, and deleting the Object does not
+// delete the namespace, which may hold more than this component.
+func NewNamespaceObject(namespace, name string, pcRef ProviderConfigRef) map[string]any {
+	o := NewObject(namespaceManifest(namespace), name, pcRef)
+	o["spec"].(map[string]any)["managementPolicies"] = []any{"Observe", "Create"}
+	return o
+}
+
+func namespaceManifest(namespace string) map[string]any {
+	return map[string]any{
+		"apiVersion": "v1",
+		"kind":       "Namespace",
+		"metadata":   map[string]any{"name": namespace},
+	}
+}

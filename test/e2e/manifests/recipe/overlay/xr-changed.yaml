@@ -1,0 +1,17 @@
+# The same composite resource with another chart value and one component
+# skipped.
+apiVersion: e2e.aicr.example.org/v1alpha1
+kind: Stack
+metadata:
+  name: overlay
+  namespace: default
+spec:
+  aicr:
+    criteria:
+      service: kind
+    skipComponents:
+    - name: e2e-notes
+    componentOverrides:
+      e2e-first:
+        values:
+          message: changed on the composite resource

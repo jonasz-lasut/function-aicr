@@ -1,0 +1,41 @@
+apiVersion: aicr.fn.crossplane.io/v1beta1
+kind: Input
+criteria:
+  accelerator: h100
+  service: eks
+  intent: training
+providerConfigRef:
+  kind: ClusterProviderConfig
+  name: gpu-cluster
+nodeScheduling:
+  system:
+    nodeSelector:
+      nodeGroup: system-pool
+    tolerations:
+    - key: dedicated
+      operator: Equal
+      value: system
+      effect: NoSchedule
+  accelerated:
+    nodeSelector:
+      nodeGroup: gpu-pool
+    tolerations:
+    - key: nvidia.com/gpu
+      operator: Equal
+      value: present
+      effect: NoSchedule
+skipDeploymentOrder: true
+skipComponents:
+- name: aws-ebs-csi-driver
+- name: aws-efa
+- name: dra-node-labeler
+- name: k8s-ephemeral-storage-metrics
+- name: kai-scheduler
+- name: kube-prometheus-stack
+- name: nktp
+- name: nodewright-customizations
+- name: nodewright-operator
+- name: nvidia-dra-driver-gpu
+- name: nvsentinel
+- name: prometheus-adapter
+- name: prometheus-operator-crds

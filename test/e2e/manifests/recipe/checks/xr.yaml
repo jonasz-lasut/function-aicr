@@ -1,0 +1,12 @@
+# The inference recipe without a node selector for the accelerated workloads,
+# which the catalog's registry has AICR's bundle check refuse for e2e-checked.
+apiVersion: e2e.aicr.example.org/v1alpha1
+kind: Stack
+metadata:
+  name: checks
+  namespace: default
+spec:
+  aicr:
+    criteria:
+      service: kind
+      intent: inference

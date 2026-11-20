@@ -28,14 +28,19 @@ func TestSplitChart(t *testing.T) {
 			args:   args{source: "https://charts.jetstack.io", chart: "cert-manager"},
 			want:   want{repository: "https://charts.jetstack.io", name: "cert-manager"},
 		},
-		"OCIRepositoryRepeatingChart": {
-			reason: "provider-helm appends the chart name, so an OCI path ending in it must be trimmed.",
-			args:   args{source: "oci://ghcr.io/nvidia/kai-scheduler", chart: "kai-scheduler"},
-			want:   want{repository: "oci://ghcr.io/nvidia", name: "kai-scheduler"},
-		},
-		"OCIRepositoryWithoutChart": {
-			reason: "An OCI path not ending in the chart name is left alone.",
+		"OCIRepository": {
+			reason: "provider-helm appends the chart name to an OCI repository, as AICR's deployers do.",
 			args:   args{source: "oci://ghcr.io/nvidia", chart: "nvsentinel"},
+			want:   want{repository: "oci://ghcr.io/nvidia", name: "nvsentinel"},
+		},
+		"OCIRepositoryEndingInTheChartName": {
+			reason: "A repository whose last segment is the chart's name is still the repository: kai-scheduler's chart is at oci://ghcr.io/kai-scheduler/kai-scheduler/kai-scheduler.",
+			args:   args{source: "oci://ghcr.io/kai-scheduler/kai-scheduler", chart: "kai-scheduler"},
+			want:   want{repository: "oci://ghcr.io/kai-scheduler/kai-scheduler", name: "kai-scheduler"},
+		},
+		"TrailingSlash": {
+			reason: "A trailing slash on the source would double the separator in the reference.",
+			args:   args{source: "oci://ghcr.io/nvidia/", chart: "nvsentinel"},
 			want:   want{repository: "oci://ghcr.io/nvidia", name: "nvsentinel"},
 		},
 	}
@@ -242,7 +247,7 @@ func TestNewRelease(t *testing.T) {
 					"forProvider": map[string]any{
 						"chart": map[string]any{
 							"name":       "kai-scheduler",
-							"repository": "oci://ghcr.io/nvidia",
+							"repository": "oci://ghcr.io/nvidia/kai-scheduler",
 						},
 						"namespace": "kai",
 						"wait":      true,

@@ -17,6 +17,7 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	sigsyaml "sigs.k8s.io/yaml"
 
@@ -32,6 +33,7 @@ import (
 	"aicr.run/pkg/upgrade"
 
 	"github.com/jonasz-lasut/function-aicr/input/v1beta1"
+	"github.com/jonasz-lasut/function-aicr/internal/checks"
 	"github.com/jonasz-lasut/function-aicr/internal/compose"
 	"github.com/jonasz-lasut/function-aicr/internal/schema"
 )
@@ -348,6 +350,26 @@ func TestRunFunction(t *testing.T) {
 					Conditions:   []*fnv1.Condition{functionSuccess()},
 				},
 				golden: golden{resources: "profile"},
+			},
+		},
+		"SchedulesOnNodePools": {
+			reason: "nodeScheduling is written to the values AICR's registry names per component: cert-manager's workloads get the system placement, gpu-operator's operator the system one and its daemonsets the accelerated toleration next to the recipe's own, and nfd's worker, which runs on every node, both.",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:            meta(),
+					Input:           yamlToProto("input/node-scheduling.yaml"),
+					Observed:        &fnv1.State{Composite: fixture("observed/xr.yaml")},
+					RequiredSchemas: map[string]*fnv1.Schema{"release": permissiveSchema()},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta:         respMeta,
+					Requirements: releaseRequirement(),
+					Conditions:   []*fnv1.Condition{functionSuccess()},
+				},
+				golden: golden{resources: "node-scheduling"},
 			},
 		},
 		"EnablesRuntimeInventory": {
@@ -694,6 +716,40 @@ func TestRunFunction(t *testing.T) {
 				},
 			},
 		},
+		"FatalWhenAComponentRequiresANodeSelector": {
+			reason: "AICR's registry requires a node selector for slinky-slurm, whose StatefulSets are tied to the zone of their volumes; like AICR's bundler, the function refuses to deploy it without one and names the Input field that sets it.",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:     meta(),
+					Input:    yamlToProto("input/requires-node-selector.yaml"),
+					Observed: &fnv1.State{Composite: fixture("observed/xr.yaml")},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta:    respMeta,
+					Results: fatal(`component "slinky-slurm" requires nodeScheduling.system.nodeSelector: its values have no node selector at controller.podSpec.nodeSelector, restapi.podSpec.nodeSelector, loginsets.slinky.podSpec.nodeSelector, accounting.podSpec.nodeSelector`),
+				},
+			},
+		},
+		"FatalWhenAICRRefusesTheBundle": {
+			reason: "AICR's registry declares checks its bundler runs before it writes a bundle; the function runs the same checks, and one that AICR rates an error stops a component that is not deployed yet. On AKS the tuning manifest renders a toleration without a key unless nodeScheduling states one with a key.",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:     meta(),
+					Input:    yamlToProto("input/refused-by-aicr.yaml"),
+					Observed: &fnv1.State{Composite: fixture("observed/xr.yaml")},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta:    respMeta,
+					Results: fatal(`AICR's bundle check for "nodewright-customizations": [INVALID_REQUEST] nodewright-customizations renders a wildcard (keyless) accelerated-node toleration. AKS admission collapses a pod's tolerations to just the wildcard, which deadlocks nodewright packages that declare interrupts on first install (NVIDIA/nodewright#296). Pass keyed tolerations instead, e.g. nodeScheduling.accelerated.tolerations nvidia.com/gpu:NoSchedule.`),
+				},
+			},
+		},
 		"FatalWhenComponentClassUnknown": {
 			reason: "A misspelled class would filter out every component and report a recipe that deploys nothing as a success.",
 			args: args{
@@ -994,6 +1050,271 @@ func TestCatalogInvariants(t *testing.T) {
 				}
 				slices.Sort(never)
 				t.Errorf("the gate never emits %d of %d resources even with everything it emitted Ready — a dependency it can never see satisfied: %v", len(never), total, never)
+			}
+		})
+	}
+}
+
+// TestNodeSchedulingAcrossTheCatalog guards what compose.ApplyNodeScheduling
+// and compose.RequireNodeSelectors assume of the catalog, on every leaf.
+func TestNodeSchedulingAcrossTheCatalog(t *testing.T) {
+	ctx := context.Background()
+	dp := embeddedDataProvider()
+	registry, err := recipe.GetComponentRegistryFor(dp)
+	if err != nil {
+		t.Fatalf("recipe.GetComponentRegistryFor(...): %v", err)
+	}
+	leaves, err := recipe.ResolveLeaves(ctx, recipe.ResolveLeavesOptions{Provider: dp, Version: testRecipeVersion})
+	if err != nil {
+		t.Fatalf("recipe.ResolveLeaves(...): %v", err)
+	}
+
+	// Every entry of the registry, not only the components of a leaf: a mixin
+	// can bring in one that no leaf has.
+	for i := range registry.Components {
+		comp := &registry.Components[i]
+		if comp.RequireSystemNodeSelectorIfStorageClassSet() || comp.RequireAcceleratedNodeSelectorIfStorageClassSet() {
+			t.Errorf("%q requires a node selector once a storage class is set, a condition compose.RequireNodeSelectors does not have: port componentHasConfiguredStorageClass from aicr.run/pkg/bundler/bundler.go", comp.Name)
+		}
+	}
+
+	placed := compose.NodeScheduling{
+		System: compose.NodePlacement{
+			NodeSelector: map[string]string{"nodeGroup": "system-pool"},
+			Tolerations:  []corev1.Toleration{{Key: "dedicated", Operator: corev1.TolerationOpEqual, Value: "system", Effect: corev1.TaintEffectNoSchedule}},
+		},
+		Accelerated: compose.NodePlacement{
+			NodeSelector: map[string]string{"nodeGroup": "gpu-pool"},
+			Tolerations:  []corev1.Toleration{{Key: "nvidia.com/gpu", Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoSchedule}},
+		},
+	}
+
+	for _, leaf := range leaves {
+		if leaf.Err != nil {
+			continue // TestCatalogInvariants reports it.
+		}
+		t.Run(leaf.Entry.Name, func(t *testing.T) {
+			t.Parallel()
+			managed := managedComponents(&fnv1.RunFunctionResponse{}, leaf.Result, &v1beta1.Input{}, registry)
+			values, err := resolveValues(ctx, leaf.Result, managed)
+			if err != nil {
+				t.Fatalf("resolveValues(...): %v", err)
+			}
+			s := &stack{managed: managed, values: values, dp: dp}
+			optedOut := s.applyNodeScheduling(placed, registry)
+			if findings := s.requireNodeSelectors(registry, optedOut); len(findings) > 0 {
+				t.Errorf("requireNodeSelectors(...) with both node selectors set: %v", findings)
+			}
+			if err := s.renderObjects(ctx); err != nil {
+				t.Errorf("renderObjects(...) with node scheduling applied: %v", err)
+			}
+		})
+	}
+}
+
+// TestBundleChecksAcrossTheCatalog guards how checks.Config describes a
+// request to AICR's bundle checks, on every leaf: a request that places both
+// kinds of workload, with tolerations that name a key, is one AICR's own
+// command line accepts for every stock recipe.
+func TestBundleChecksAcrossTheCatalog(t *testing.T) {
+	ctx := context.Background()
+	dp := embeddedDataProvider()
+	registry, err := recipe.GetComponentRegistryFor(dp)
+	if err != nil {
+		t.Fatalf("recipe.GetComponentRegistryFor(...): %v", err)
+	}
+	leaves, err := recipe.ResolveLeaves(ctx, recipe.ResolveLeavesOptions{Provider: dp, Version: testRecipeVersion})
+	if err != nil {
+		t.Fatalf("recipe.ResolveLeaves(...): %v", err)
+	}
+
+	placed := checks.Request{Scheduling: compose.NodeScheduling{
+		System: compose.NodePlacement{NodeSelector: map[string]string{"nodeGroup": "system-pool"}},
+		Accelerated: compose.NodePlacement{
+			NodeSelector: map[string]string{"nodeGroup": "gpu-pool"},
+			Tolerations:  []corev1.Toleration{{Key: "nvidia.com/gpu", Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoSchedule}},
+		},
+	}}
+
+	refusedUnplaced := 0
+	for _, leaf := range leaves {
+		if leaf.Err != nil {
+			continue // TestCatalogInvariants reports it.
+		}
+		managed := slices.Sorted(maps.Keys(managedComponents(&fnv1.RunFunctionResponse{}, leaf.Result, &v1beta1.Input{}, registry)))
+
+		if findings := checks.Run(ctx, leaf.Result, checks.Config(placed), registry, managed); len(findings) > 0 {
+			t.Errorf("%s: AICR's bundle checks report on a request that places both kinds of workload: %v", leaf.Entry.Name, findings)
+		}
+		for _, f := range checks.Run(ctx, leaf.Result, checks.Config(checks.Request{}), registry, managed) {
+			if f.Blocking {
+				refusedUnplaced++
+				break
+			}
+		}
+	}
+	if refusedUnplaced == 0 {
+		t.Error("no leaf is refused without node scheduling: either AICR dropped its AKS and OKE checks, or the checks no longer see what checks.Config tells them")
+	}
+}
+
+func TestRefuse(t *testing.T) {
+	const chart, manifestOnly = "gpu-operator", "nodewright-customizations"
+
+	observed := func(names ...string) map[resource.Name]resource.ObservedComposed {
+		out := make(map[resource.Name]resource.ObservedComposed, len(names))
+		for _, name := range names {
+			out[resource.Name(name)] = resource.ObservedComposed{Resource: composed.New()}
+		}
+		return out
+	}
+	warning := func(msg string) *fnv1.Result {
+		return &fnv1.Result{Severity: fnv1.Severity_SEVERITY_WARNING, Message: msg, Target: fnv1.Target_TARGET_COMPOSITE.Enum()}
+	}
+
+	type args struct {
+		findings []checks.Finding
+		observed map[resource.Name]resource.ObservedComposed
+	}
+	type want struct {
+		err     error
+		results []*fnv1.Result
+	}
+
+	cases := map[string]struct {
+		reason string
+		args   args
+		want   want
+	}{
+		"NoFindings": {
+			reason: "A request AICR has nothing to say about goes on.",
+		},
+		"NotBlocking": {
+			reason: "A finding AICR does not rate blocking is a warning.",
+			args:   args{findings: []checks.Finding{{Component: chart, Message: "consider this"}}},
+			want:   want{results: []*fnv1.Result{warning("consider this")}},
+		},
+		"BlockingOnFirstInstall": {
+			reason: "A blocking finding stops a component that is not deployed yet, as it stops AICR's bundler.",
+			args:   args{findings: []checks.Finding{{Component: chart, Message: "refused", Blocking: true}}},
+			want:   want{err: cmpopts.AnyError},
+		},
+		"BlockingOnADeployedChart": {
+			reason: "A component whose Release is observed was accepted before; refusing now would freeze its stack, so the finding is a warning.",
+			args: args{
+				findings: []checks.Finding{{Component: chart, Message: "refused", Blocking: true}},
+				observed: observed(chart),
+			},
+			want: want{results: []*fnv1.Result{warning(`refused; "gpu-operator" is already deployed, so it is not refused`)}},
+		},
+		"BlockingOnADeployedManifestOnlyComponent": {
+			reason: "A manifest-only component has no Release: it is deployed when one of its Objects is observed.",
+			args: args{
+				findings: []checks.Finding{{Component: manifestOnly, Message: "refused", Blocking: true}},
+				observed: observed("nodewright-customizations-post-nodewright-tuning"),
+			},
+			want: want{results: []*fnv1.Result{warning(`refused; "nodewright-customizations" is already deployed, so it is not refused`)}},
+		},
+		"OneNewComponentAmongDeployedOnes": {
+			reason: "The rule is per component: a finding on a new component stops the request, and the deployed one's is still reported.",
+			args: args{
+				findings: []checks.Finding{
+					{Component: chart, Message: "old", Blocking: true},
+					{Component: manifestOnly, Message: "new", Blocking: true},
+				},
+				observed: observed(chart),
+			},
+			want: want{
+				err:     cmpopts.AnyError,
+				results: []*fnv1.Result{warning(`old; "gpu-operator" is already deployed, so it is not refused`)},
+			},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			rsp := &fnv1.RunFunctionResponse{}
+			s := &stack{
+				observed: tc.args.observed,
+				objects:  manifestObjects{post: map[string][]string{manifestOnly: {"nodewright-customizations-post-nodewright-tuning"}}},
+			}
+
+			err := s.refuse(rsp, tc.args.findings)
+
+			if diff := cmp.Diff(tc.want.err, err, cmpopts.EquateErrors()); diff != "" {
+				t.Errorf("%s\nrefuse(...): -want err, +got err:\n%s", tc.reason, diff)
+			}
+			if diff := cmp.Diff(tc.want.results, rsp.GetResults(), protocmp.Transform(), cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("%s\nrefuse(...): -want results, +got results:\n%s", tc.reason, diff)
+			}
+		})
+	}
+}
+
+// TestRequireNodeSelectorsReadsTheOverride checks the values the requirement
+// is tested against: the ones a component deploys with, its override merged
+// in. It uses slinky-slurm's entry in the embedded registry, which requires a
+// selector for both kinds of workload.
+func TestRequireNodeSelectorsReadsTheOverride(t *testing.T) {
+	const name = "slinky-slurm"
+
+	registry, err := recipe.GetComponentRegistryFor(embeddedDataProvider())
+	if err != nil {
+		t.Fatalf("recipe.GetComponentRegistryFor(...): %v", err)
+	}
+	comp := registry.Get(name)
+	if comp == nil || !comp.RequireSystemNodeSelector() || !comp.RequireAcceleratedNodeSelector() {
+		t.Fatalf("the embedded registry no longer requires both node selectors for %q: pick another component for this test", name)
+	}
+
+	// An override that sets a selector at every path the registry requires.
+	selectors := make(map[string]any)
+	for _, path := range slices.Concat(comp.GetSystemNodeSelectorPaths(), comp.GetAcceleratedNodeSelectorPaths()) {
+		if err := fieldpath.Pave(selectors).SetValue(path, map[string]any{"topology.kubernetes.io/zone": "us-east-1a"}); err != nil {
+			t.Fatalf("SetValue(%q): %v", path, err)
+		}
+	}
+
+	type args struct {
+		overrides map[string]*compose.Override
+	}
+	type want struct {
+		refused bool
+	}
+
+	cases := map[string]struct {
+		reason string
+		args   args
+		want   want
+	}{
+		"NoSelector": {
+			reason: "Without nodeScheduling and without an override the component has no selector, and is refused.",
+			want:   want{refused: true},
+		},
+		"SelectorFromTheOverride": {
+			reason: "An override places one component on its own, so a selector it sets satisfies the requirement.",
+			args:   args{overrides: map[string]*compose.Override{name: {Values: selectors}}},
+		},
+		"OverrideWithoutSelector": {
+			reason: "An override of other values supplies no selector.",
+			args:   args{overrides: map[string]*compose.Override{name: {Values: map[string]any{"replicas": 1}}}},
+			want:   want{refused: true},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			s := &stack{
+				managed:   map[string]*recipe.ComponentRef{"slinky-slurm": {Name: "slinky-slurm", Type: recipe.ComponentTypeHelm}},
+				values:    map[string]map[string]any{"slinky-slurm": {}},
+				overrides: tc.args.overrides,
+			}
+			optedOut := s.applyNodeScheduling(compose.NodeScheduling{}, registry)
+
+			findings := s.requireNodeSelectors(registry, optedOut)
+
+			if diff := cmp.Diff(tc.want.refused, len(findings) > 0); diff != "" {
+				t.Errorf("%s\nrequireNodeSelectors(...): -want refused, +got refused:\n%s\nfindings: %v", tc.reason, diff, findings)
 			}
 		})
 	}
@@ -1330,9 +1651,91 @@ func TestGate(t *testing.T) {
 	}
 }
 
-// TestManagedComponents exercises managedComponents directly: the embedded
-// "kind" recipe used by TestRunFunction has no disabled or non-Helm component,
-// and its skip lists name only real components.
+func TestNamespaceObject(t *testing.T) {
+	const namespace = "gpu-operator"
+	chart := &recipe.ComponentRef{Name: "gpu-operator", Type: recipe.ComponentTypeHelm, Namespace: namespace, Source: "https://helm.ngc.nvidia.com/nvidia", Chart: "gpu-operator"}
+	manifestOnly := &recipe.ComponentRef{Name: "dra-node-labeler", Type: recipe.ComponentTypeHelm, Namespace: namespace, ManifestFiles: []string{"labeler.yaml"}}
+
+	type args struct {
+		component *recipe.ComponentRef
+		pre       []string
+		post      []string
+		overrides map[string]*compose.Override
+		rendered  []string
+	}
+	type want struct {
+		name string
+	}
+
+	cases := map[string]struct {
+		reason string
+		args   args
+		want   want
+	}{
+		"PreManifests": {
+			reason: "An Object for a pre-manifest file is created before the component's Release, which would otherwise be what creates the namespace.",
+			args:   args{component: chart, pre: []string{"gpu-operator-pre-configmap-kernel-module-params"}},
+			want:   want{name: "gpu-operator-pre-namespace-gpu-operator"},
+		},
+		"PostManifestsOfAChart": {
+			reason: "Post-manifest Objects follow the Release, which has created the namespace by then.",
+			args:   args{component: chart, post: []string{"gpu-operator-post-clusterpolicy-default"}},
+		},
+		"ManifestOnly": {
+			reason: "A manifest-only component has no Release to create its namespace.",
+			args:   args{component: manifestOnly, post: []string{"dra-node-labeler-post-daemonset-labeler"}},
+			want:   want{name: "dra-node-labeler-pre-namespace-gpu-operator"},
+		},
+		"NothingRendered": {
+			reason: "A component whose manifest files render no document composes nothing, so it needs no namespace either.",
+			args:   args{component: manifestOnly},
+		},
+		"DeclaredByTheRecipe": {
+			reason: "A recipe that declares the namespace in the component's manifest files, as for Talos, keeps its own.",
+			args: args{
+				component: chart,
+				pre:       []string{"gpu-operator-pre-namespace-gpu-operator"},
+				rendered:  []string{"gpu-operator-pre-namespace-gpu-operator"},
+			},
+		},
+		"DeclaredByTheRecipeAfterTheChart": {
+			reason: "A manifest-only component's manifest files are its post wave, so a namespace declared there is the recipe's own too.",
+			args: args{
+				component: manifestOnly,
+				post:      []string{"dra-node-labeler-post-namespace-gpu-operator", "dra-node-labeler-post-daemonset-labeler"},
+				rendered:  []string{"dra-node-labeler-post-namespace-gpu-operator"},
+			},
+		},
+		"OverriddenNamespace": {
+			reason: "The namespace is the one the component deploys to, an override or a kept namespace included.",
+			args: args{
+				component: chart,
+				pre:       []string{"gpu-operator-pre-configmap-kernel-module-params"},
+				overrides: map[string]*compose.Override{"gpu-operator": {Namespace: "nvidia"}},
+			},
+			want: want{name: "gpu-operator-pre-namespace-nvidia"},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			s := &stack{overrides: tc.args.overrides, rendered: make(map[string]map[string]any)}
+			for _, name := range tc.args.rendered {
+				s.rendered[name] = map[string]any{}
+			}
+
+			got := s.namespaceObject(tc.args.component, tc.args.pre, tc.args.post)
+
+			if diff := cmp.Diff(tc.want.name, got); diff != "" {
+				t.Errorf("%s\nnamespaceObject(...): -want, +got:\n%s", tc.reason, diff)
+			}
+			if _, ok := s.rendered[tc.want.name]; tc.want.name != "" && !ok {
+				t.Errorf("%s\nnamespaceObject(...) returned %q without rendering it", tc.reason, tc.want.name)
+			}
+		})
+	}
+}
+
 func TestKeepNamespaces(t *testing.T) {
 	const operator, customizations, other = "nodewright-operator", "nodewright-customizations", "cert-manager"
 
@@ -1594,6 +1997,9 @@ func TestUpgradeRecords(t *testing.T) {
 	}
 }
 
+// TestManagedComponents exercises managedComponents directly: the embedded
+// "kind" recipe used by TestRunFunction has no disabled or non-Helm component,
+// and its skip lists name only real components.
 func TestManagedComponents(t *testing.T) {
 	warning := func(format string, a ...any) *fnv1.Result {
 		return &fnv1.Result{

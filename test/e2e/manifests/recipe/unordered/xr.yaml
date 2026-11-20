@@ -1,0 +1,17 @@
+# e2e-first cannot become ready until the feature labels the node, and the
+# rollout order is turned off.
+apiVersion: e2e.aicr.example.org/v1alpha1
+kind: Stack
+metadata:
+  name: unordered
+  namespace: default
+spec:
+  aicr:
+    criteria:
+      service: kind
+    skipDeploymentOrder: true
+    componentOverrides:
+      e2e-first:
+        values:
+          nodeSelector:
+            e2e.aicr.example.org/first: ready

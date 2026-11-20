@@ -1,0 +1,9 @@
+apiVersion: e2e.aicr.example.org/v1alpha1
+kind: Stack
+metadata:
+  name: converge
+  namespace: default
+spec:
+  aicr:
+    criteria:
+      service: kind

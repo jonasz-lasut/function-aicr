@@ -1,0 +1,382 @@
+# The nodes KWOK simulates for the suite's stock recipe: two system nodes and
+# four accelerated ones, in the shape of an EKS cluster with H100 instances.
+# They are what AICR v1.3.0's own KWOK lane creates for that recipe, rendered
+# once from its node template and its EKS node profiles
+# (kwok/templates/nodes/node.yaml.tmpl, kwok/profiles/eks in NVIDIA/aicr).
+#
+# A node has no kubelet. The taint keeps a pod off it unless the pod tolerates
+# it, and the `aicr.run/node-type` label is what the Composition's
+# nodeScheduling selects.
+apiVersion: v1
+kind: Node
+metadata:
+  name: gpu-0
+  labels:
+    type: kwok
+    kubernetes.io/hostname: gpu-0
+    kubernetes.io/os: linux
+    kubernetes.io/arch: amd64
+    node.kubernetes.io/instance-type: p5.48xlarge
+    topology.kubernetes.io/region: us-east-1
+    topology.kubernetes.io/zone: us-east-1a
+    aicr.run/node-type: accelerated
+    nvidia.com/gpu.present: "true"
+    nvidia.com/gpu.product: NVIDIA-H100-80GB-HBM3
+    nvidia.com/gpu.count: "8"
+    nvidia.com/gpu.memory: "81920"
+    nvidia.com/cuda.driver.major: "570"
+    nvidia.com/cuda.driver.minor: "86"
+  annotations:
+    kwok.x-k8s.io/node: "fake"
+    nvidia.com/gpu.driver.version: "570.86.16"
+spec:
+  taints:
+    - key: kwok.x-k8s.io/node
+      value: fake
+      effect: NoSchedule
+status:
+  nodeInfo:
+    architecture: amd64
+    containerRuntimeVersion: containerd://1.7.0
+    kernelVersion: 6.1.0-fake
+    kubeletVersion: v1.33.5
+    operatingSystem: linux
+    osImage: Amazon Linux 2023
+  capacity:
+    cpu: "192"
+    memory: 2048Gi
+    ephemeral-storage: 3800Gi
+    pods: "250"
+    nvidia.com/gpu: "8"
+  allocatable:
+    cpu: "192"
+    memory: 2048Gi
+    ephemeral-storage: 3800Gi
+    pods: "250"
+    nvidia.com/gpu: "8"
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: KubeletReady
+      message: kubelet is posting ready status
+    - type: MemoryPressure
+      status: "False"
+      reason: KubeletHasSufficientMemory
+    - type: DiskPressure
+      status: "False"
+      reason: KubeletHasNoDiskPressure
+    - type: PIDPressure
+      status: "False"
+      reason: KubeletHasSufficientPID
+  addresses:
+    - type: Hostname
+      address: gpu-0
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: gpu-1
+  labels:
+    type: kwok
+    kubernetes.io/hostname: gpu-1
+    kubernetes.io/os: linux
+    kubernetes.io/arch: amd64
+    node.kubernetes.io/instance-type: p5.48xlarge
+    topology.kubernetes.io/region: us-east-1
+    topology.kubernetes.io/zone: us-east-1b
+    aicr.run/node-type: accelerated
+    nvidia.com/gpu.present: "true"
+    nvidia.com/gpu.product: NVIDIA-H100-80GB-HBM3
+    nvidia.com/gpu.count: "8"
+    nvidia.com/gpu.memory: "81920"
+    nvidia.com/cuda.driver.major: "570"
+    nvidia.com/cuda.driver.minor: "86"
+  annotations:
+    kwok.x-k8s.io/node: "fake"
+    nvidia.com/gpu.driver.version: "570.86.16"
+spec:
+  taints:
+    - key: kwok.x-k8s.io/node
+      value: fake
+      effect: NoSchedule
+status:
+  nodeInfo:
+    architecture: amd64
+    containerRuntimeVersion: containerd://1.7.0
+    kernelVersion: 6.1.0-fake
+    kubeletVersion: v1.33.5
+    operatingSystem: linux
+    osImage: Amazon Linux 2023
+  capacity:
+    cpu: "192"
+    memory: 2048Gi
+    ephemeral-storage: 3800Gi
+    pods: "250"
+    nvidia.com/gpu: "8"
+  allocatable:
+    cpu: "192"
+    memory: 2048Gi
+    ephemeral-storage: 3800Gi
+    pods: "250"
+    nvidia.com/gpu: "8"
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: KubeletReady
+      message: kubelet is posting ready status
+    - type: MemoryPressure
+      status: "False"
+      reason: KubeletHasSufficientMemory
+    - type: DiskPressure
+      status: "False"
+      reason: KubeletHasNoDiskPressure
+    - type: PIDPressure
+      status: "False"
+      reason: KubeletHasSufficientPID
+  addresses:
+    - type: Hostname
+      address: gpu-1
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: gpu-2
+  labels:
+    type: kwok
+    kubernetes.io/hostname: gpu-2
+    kubernetes.io/os: linux
+    kubernetes.io/arch: amd64
+    node.kubernetes.io/instance-type: p5.48xlarge
+    topology.kubernetes.io/region: us-east-1
+    topology.kubernetes.io/zone: us-east-1a
+    aicr.run/node-type: accelerated
+    nvidia.com/gpu.present: "true"
+    nvidia.com/gpu.product: NVIDIA-H100-80GB-HBM3
+    nvidia.com/gpu.count: "8"
+    nvidia.com/gpu.memory: "81920"
+    nvidia.com/cuda.driver.major: "570"
+    nvidia.com/cuda.driver.minor: "86"
+  annotations:
+    kwok.x-k8s.io/node: "fake"
+    nvidia.com/gpu.driver.version: "570.86.16"
+spec:
+  taints:
+    - key: kwok.x-k8s.io/node
+      value: fake
+      effect: NoSchedule
+status:
+  nodeInfo:
+    architecture: amd64
+    containerRuntimeVersion: containerd://1.7.0
+    kernelVersion: 6.1.0-fake
+    kubeletVersion: v1.33.5
+    operatingSystem: linux
+    osImage: Amazon Linux 2023
+  capacity:
+    cpu: "192"
+    memory: 2048Gi
+    ephemeral-storage: 3800Gi
+    pods: "250"
+    nvidia.com/gpu: "8"
+  allocatable:
+    cpu: "192"
+    memory: 2048Gi
+    ephemeral-storage: 3800Gi
+    pods: "250"
+    nvidia.com/gpu: "8"
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: KubeletReady
+      message: kubelet is posting ready status
+    - type: MemoryPressure
+      status: "False"
+      reason: KubeletHasSufficientMemory
+    - type: DiskPressure
+      status: "False"
+      reason: KubeletHasNoDiskPressure
+    - type: PIDPressure
+      status: "False"
+      reason: KubeletHasSufficientPID
+  addresses:
+    - type: Hostname
+      address: gpu-2
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: gpu-3
+  labels:
+    type: kwok
+    kubernetes.io/hostname: gpu-3
+    kubernetes.io/os: linux
+    kubernetes.io/arch: amd64
+    node.kubernetes.io/instance-type: p5.48xlarge
+    topology.kubernetes.io/region: us-east-1
+    topology.kubernetes.io/zone: us-east-1b
+    aicr.run/node-type: accelerated
+    nvidia.com/gpu.present: "true"
+    nvidia.com/gpu.product: NVIDIA-H100-80GB-HBM3
+    nvidia.com/gpu.count: "8"
+    nvidia.com/gpu.memory: "81920"
+    nvidia.com/cuda.driver.major: "570"
+    nvidia.com/cuda.driver.minor: "86"
+  annotations:
+    kwok.x-k8s.io/node: "fake"
+    nvidia.com/gpu.driver.version: "570.86.16"
+spec:
+  taints:
+    - key: kwok.x-k8s.io/node
+      value: fake
+      effect: NoSchedule
+status:
+  nodeInfo:
+    architecture: amd64
+    containerRuntimeVersion: containerd://1.7.0
+    kernelVersion: 6.1.0-fake
+    kubeletVersion: v1.33.5
+    operatingSystem: linux
+    osImage: Amazon Linux 2023
+  capacity:
+    cpu: "192"
+    memory: 2048Gi
+    ephemeral-storage: 3800Gi
+    pods: "250"
+    nvidia.com/gpu: "8"
+  allocatable:
+    cpu: "192"
+    memory: 2048Gi
+    ephemeral-storage: 3800Gi
+    pods: "250"
+    nvidia.com/gpu: "8"
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: KubeletReady
+      message: kubelet is posting ready status
+    - type: MemoryPressure
+      status: "False"
+      reason: KubeletHasSufficientMemory
+    - type: DiskPressure
+      status: "False"
+      reason: KubeletHasNoDiskPressure
+    - type: PIDPressure
+      status: "False"
+      reason: KubeletHasSufficientPID
+  addresses:
+    - type: Hostname
+      address: gpu-3
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: system-0
+  labels:
+    type: kwok
+    kubernetes.io/hostname: system-0
+    kubernetes.io/os: linux
+    kubernetes.io/arch: amd64
+    node.kubernetes.io/instance-type: m7i.4xlarge
+    topology.kubernetes.io/region: us-east-1
+    topology.kubernetes.io/zone: us-east-1a
+    aicr.run/node-type: system
+    node-role.kubernetes.io/control-plane: ""
+  annotations:
+    kwok.x-k8s.io/node: "fake"
+spec:
+  taints:
+    - key: kwok.x-k8s.io/node
+      value: fake
+      effect: NoSchedule
+status:
+  nodeInfo:
+    architecture: amd64
+    containerRuntimeVersion: containerd://1.7.0
+    kernelVersion: 6.1.0-fake
+    kubeletVersion: v1.33.5
+    operatingSystem: linux
+    osImage: Amazon Linux 2023
+  capacity:
+    cpu: "16"
+    memory: 64Gi
+    ephemeral-storage: 100Gi
+    pods: "110"
+  allocatable:
+    cpu: "16"
+    memory: 64Gi
+    ephemeral-storage: 100Gi
+    pods: "110"
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: KubeletReady
+      message: kubelet is posting ready status
+    - type: MemoryPressure
+      status: "False"
+      reason: KubeletHasSufficientMemory
+    - type: DiskPressure
+      status: "False"
+      reason: KubeletHasNoDiskPressure
+    - type: PIDPressure
+      status: "False"
+      reason: KubeletHasSufficientPID
+  addresses:
+    - type: Hostname
+      address: system-0
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: system-1
+  labels:
+    type: kwok
+    kubernetes.io/hostname: system-1
+    kubernetes.io/os: linux
+    kubernetes.io/arch: amd64
+    node.kubernetes.io/instance-type: m7i.4xlarge
+    topology.kubernetes.io/region: us-east-1
+    topology.kubernetes.io/zone: us-east-1b
+    aicr.run/node-type: system
+    node-role.kubernetes.io/control-plane: ""
+  annotations:
+    kwok.x-k8s.io/node: "fake"
+spec:
+  taints:
+    - key: kwok.x-k8s.io/node
+      value: fake
+      effect: NoSchedule
+status:
+  nodeInfo:
+    architecture: amd64
+    containerRuntimeVersion: containerd://1.7.0
+    kernelVersion: 6.1.0-fake
+    kubeletVersion: v1.33.5
+    operatingSystem: linux
+    osImage: Amazon Linux 2023
+  capacity:
+    cpu: "16"
+    memory: 64Gi
+    ephemeral-storage: 100Gi
+    pods: "110"
+  allocatable:
+    cpu: "16"
+    memory: 64Gi
+    ephemeral-storage: 100Gi
+    pods: "110"
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: KubeletReady
+      message: kubelet is posting ready status
+    - type: MemoryPressure
+      status: "False"
+      reason: KubeletHasSufficientMemory
+    - type: DiskPressure
+      status: "False"
+      reason: KubeletHasNoDiskPressure
+    - type: PIDPressure
+      status: "False"
+      reason: KubeletHasSufficientPID
+  addresses:
+    - type: Hostname
+      address: system-1

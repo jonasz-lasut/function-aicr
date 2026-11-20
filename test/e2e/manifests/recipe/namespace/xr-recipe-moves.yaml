@@ -1,0 +1,12 @@
+# The criteria now select the recipe that places e2e-first in the namespace
+# e2e-first-moved.
+apiVersion: e2e.aicr.example.org/v1alpha1
+kind: Stack
+metadata:
+  name: namespace
+  namespace: default
+spec:
+  aicr:
+    criteria:
+      service: kind
+      intent: training

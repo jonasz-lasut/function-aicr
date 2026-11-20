@@ -1,0 +1,11 @@
+apiVersion: e2e.aicr.example.org/v1alpha1
+kind: Stack
+metadata:
+  name: h100-eks-training
+  namespace: default
+spec:
+  aicr:
+    criteria:
+      accelerator: h100
+      service: eks
+      intent: training

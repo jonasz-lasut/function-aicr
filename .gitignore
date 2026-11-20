@@ -1,2 +1,17 @@
 /function
 *.xpkg
+
+# The mdBook output (book.toml: build-dir).
+/book
+
+# The style packages `vale sync` fetches from .vale.ini. Only the vocabulary
+# is committed.
+/.vale/styles/*
+!/.vale/styles/config
+/.vale/styles/config/*
+!/.vale/styles/config/vocabularies
+
+# The crossplane build submodule's output and tool cache (Makefile).
+/_output
+/.cache
+/.work

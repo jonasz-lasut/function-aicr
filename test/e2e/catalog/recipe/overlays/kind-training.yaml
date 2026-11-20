@@ -1,0 +1,16 @@
+# A recipe that places e2e-first in another namespace than the kind recipe
+# does: what an AICR upgrade that moves a component looks like to a composite
+# resource whose criteria change from one to the other.
+kind: RecipeMetadata
+apiVersion: aicr.run/v1beta1
+metadata:
+  name: kind-training
+spec:
+  base: kind
+  criteria:
+    service: kind
+    intent: training
+  componentRefs:
+    - name: e2e-first
+      type: Helm
+      namespace: e2e-first-moved

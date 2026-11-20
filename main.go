@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"io"
+	"log/slog"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -40,6 +41,12 @@ func (c *CLI) Run() error {
 	log, err := function.NewLogger(c.Debug)
 	if err != nil {
 		return err
+	}
+	// AICR's packages log through log/slog's default logger. Its bundle
+	// checks warn there about every finding, on every reconcile, which the
+	// function already reports as a result on the composite resource.
+	if !c.Debug {
+		slog.SetLogLoggerLevel(slog.LevelError)
 	}
 	ttl := response.DefaultTTL
 	if c.TTL != nil {

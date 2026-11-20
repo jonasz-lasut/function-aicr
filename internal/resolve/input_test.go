@@ -140,6 +140,27 @@ func TestInput(t *testing.T) {
 				}},
 			}},
 		},
+		"NodeSelectorsKeepEmptyStrings": {
+			reason: "A node label's value may be the empty string, as with the node-role labels, so in a node selector it is a value; the selector still merges key by key over the static one.",
+			args: args{
+				static: static(map[string]any{
+					"overlayFrom": map[string]any{"fieldPath": "spec.aicr"},
+					"nodeScheduling": map[string]any{"system": map[string]any{
+						"nodeSelector": map[string]any{"nodeGroup": "system-pool"},
+					}},
+				}),
+				xr: xr(map[string]any{"nodeScheduling": map[string]any{"system": map[string]any{
+					"nodeSelector": map[string]any{"node-role.kubernetes.io/system": ""},
+				}}}),
+			},
+			want: want{in: &v1beta1.Input{
+				TypeMeta:    typeMeta,
+				OverlayFrom: overlayFrom,
+				NodeScheduling: &v1beta1.NodeScheduling{System: &v1beta1.NodePlacement{
+					NodeSelector: map[string]string{"nodeGroup": "system-pool", "node-role.kubernetes.io/system": ""},
+				}},
+			}},
+		},
 		"AbsentPathKeepsStatic": {
 			reason: "A composite resource that does not carry the overlay object gets the static Input alone; that is not an error.",
 			args: args{

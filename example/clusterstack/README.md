@@ -1,13 +1,15 @@
 # ClusterStack example
 
-Demonstrates `function-aicr` serving an XR it knows nothing about: the XRD
-declares, under `spec.aicr`, the `Input` fields a `ClusterStack` may set, and
-the Composition's `overlayFrom` merges that object over its static `Input`.
+An XRD, a Composition and two composite resources for `crossplane render`.
+The XRD declares, under `spec.aicr`, the `Input` fields a `ClusterStack` may
+set. The Composition's `overlayFrom` merges that object over its static
+`Input`.
 
-The function validates every composed resource against the provider CRD schema
-Crossplane resolves for it, so `render` must be given those schemas.
+[Render locally][render-locally] in the documentation walks through it.
 
-Run the function locally, then render:
+## Render
+
+Run the function, then render:
 
 ```shell
 go run . --insecure --debug
@@ -19,14 +21,13 @@ crossplane render xr.yaml composition.yaml functions.yaml \
   --include-function-results
 ```
 
-Gating is on and nothing is observed, so only the dependency-free components
-appear. That is correct, not a bug: rerun with `--observed-resources` marking
-`prometheus-operator-crds` Ready to see `cert-manager` emitted.
+The first render has no observed resources, so only the components without
+dependencies appear. Rerun with `--observed-resources` and
+`prometheus-operator-crds` marked `Ready` to see `cert-manager` emitted.
 
-`xr-eks.yaml` selects an EKS tier that also carries manifest files: the
-manifest-only `nodewright-customizations` component renders its NodeWright
-tuning CR into a provider-kubernetes `Object`, so the function requires the
-`Object` schema as well and `schemas/` supplies it:
+`xr-eks.yaml` selects an EKS stack whose manifest-only
+`nodewright-customizations` component renders its NodeWright tuning resource
+into a provider-kubernetes `Object`:
 
 ```shell
 crossplane render xr-eks.yaml composition.yaml functions.yaml \
@@ -34,36 +35,27 @@ crossplane render xr-eks.yaml composition.yaml functions.yaml \
   --include-function-results
 ```
 
-## About the files under `schemas/`
+## The files under `schemas/`
 
-`helm.m.crossplane.io_v1beta1.json` and `kubernetes.m.crossplane.io_v1alpha1.json`
-are **hand-written stand-ins** for provider-helm's `Release` and
-provider-kubernetes' `Object` CRD schemas, not copies of them. They cover only
-the fields this function sets (`spec.forProvider.chart.{name,repository,version}`,
-`spec.forProvider.namespace`, `spec.forProvider.wait`, `spec.forProvider.values`
-for the Release; `spec.forProvider.manifest` for the Object;
-`spec.providerConfigRef.{kind,name}` for both), and are missing everything else
-the real CRDs declare.
+`helm.m.crossplane.io_v1beta1.json` and
+`kubernetes.m.crossplane.io_v1alpha1.json` are hand-written stand-ins for
+provider-helm's `Release` and provider-kubernetes' `Object` CRD schemas, not
+copies of them. They cover only the fields the function sets:
 
-Their structure — a full OpenAPI v3 document under `components.schemas`, with
-each schema tagged `x-kubernetes-group-version-kind: [{group, version, kind}]`
-so it can be matched against the `helm.m.crossplane.io/v1beta1` and
-`kubernetes.m.crossplane.io/v1alpha1` GVKs — was verified by reading the actual
-code `crossplane render` and the Crossplane core reconciler both use to resolve
-required schemas:
+- for the `Release`, `spec.forProvider.chart.{name,repository,version}`,
+  `spec.forProvider.namespace`, `spec.forProvider.wait` and
+  `spec.forProvider.values`;
+- for the `Object`, `spec.forProvider.manifest` and
+  `spec.managementPolicies`;
+- for both, `spec.providerConfigRef.{kind,name}`.
 
-- `github.com/crossplane/cli/v2@v2.3.0`'s
-  `cmd/crossplane/render/schemas.go` (`LoadRequiredSchemas`) parses every
-  `.json` file under `--required-schemas=DIR` as a `spec3.OpenAPI` document —
-  exactly what `kubectl get --raw /openapi/v3/<group-version>` returns.
-- `github.com/crossplane/crossplane/v2`'s `internal/render/schemas.go`
-  (`NewInMemoryOpenAPIClient`) and `internal/xfn/required_schemas.go`
-  (`OpenAPISchemasFetcher.Fetch`) then walk `components.schemas`, matching by
-  the `x-kubernetes-group-version-kind` extension, and hand the function the
-  single matched schema object.
+Each file is an OpenAPI v3 document, the format
+`kubectl get --raw /openapi/v3/<group-version>` returns and
+`--required-schemas` reads. Crossplane matches a schema to a kind by its
+`x-kubernetes-group-version-kind` extension.
 
-To replace them with the real schemas against a cluster where the providers
-are installed:
+To replace the stand-ins with the real schemas, fetch them from a cluster
+that has the providers:
 
 ```shell
 mkdir -p schemas
@@ -72,3 +64,5 @@ kubectl get --raw '/openapi/v3/apis/helm.m.crossplane.io/v1beta1' \
 kubectl get --raw '/openapi/v3/apis/kubernetes.m.crossplane.io/v1alpha1' \
   > schemas/kubernetes.m.crossplane.io_v1alpha1.json
 ```
+
+[render-locally]: https://jonasz-lasut.github.io/function-aicr/authors/render-locally.html

@@ -24,6 +24,7 @@ import (
 	"aicr.run/pkg/upgrade"
 
 	"github.com/jonasz-lasut/function-aicr/input/v1beta1"
+	"github.com/jonasz-lasut/function-aicr/internal/checks"
 	"github.com/jonasz-lasut/function-aicr/internal/compose"
 	"github.com/jonasz-lasut/function-aicr/internal/resolve"
 	"github.com/jonasz-lasut/function-aicr/internal/schema"
@@ -116,6 +117,14 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 		response.Fatal(rsp, err)
 		return rsp, nil
 	}
+	// The override values as the Input states them, for AICR's bundle checks:
+	// wiring the DRA eviction contract takes them out of the overrides.
+	overrideValues := make(map[string]map[string]any, len(overrides))
+	for name, o := range overrides {
+		if o != nil && o.Values != nil {
+			overrideValues[name] = o.Values
+		}
+	}
 
 	pcRef, err := resolve.ProviderConfigRef(in)
 	if err != nil {
@@ -141,6 +150,11 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 	profile, err := resolve.Profile(in)
 	if err != nil {
 		response.Fatal(rsp, errors.Wrap(err, "cannot resolve the recipe profile"))
+		return rsp, nil
+	}
+	scheduling, err := resolve.NodeScheduling(in)
+	if err != nil {
+		response.Fatal(rsp, errors.Wrap(err, "cannot resolve the node scheduling"))
 		return rsp, nil
 	}
 
@@ -180,6 +194,7 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 		response.Fatal(rsp, errors.Wrapf(err, "cannot get observed composed resources from %T", req))
 		return rsp, nil
 	}
+	optedOut := s.applyNodeScheduling(scheduling, registry)
 	if in.DRAEviction {
 		if err := s.wireDRAEviction(rsp); err != nil {
 			response.Fatal(rsp, err)
@@ -188,6 +203,21 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 	}
 	s.keepNamespaces(rsp)
 	if err := s.renderObjects(ctx); err != nil {
+		response.Fatal(rsp, err)
+		return rsp, nil
+	}
+
+	// What AICR's bundler would refuse to bundle. The Objects are rendered
+	// first, because whether a manifest-only component is already deployed is
+	// read from them.
+	findings := s.requireNodeSelectors(registry, optedOut)
+	findings = append(findings, checks.Run(ctx, res, checks.Config(checks.Request{
+		Scheduling:  scheduling,
+		Skipped:     skippedComponents(in),
+		Values:      overrideValues,
+		DRAEviction: in.DRAEviction,
+	}), registry, slices.Sorted(maps.Keys(managed)))...)
+	if err := s.refuse(rsp, findings); err != nil {
 		response.Fatal(rsp, err)
 		return rsp, nil
 	}
@@ -280,6 +310,86 @@ type stack struct {
 	// waiting names, per component the gate withheld, what it waits for: a
 	// dependency, or one of its own pre-manifest Objects.
 	waiting map[string]string
+}
+
+// applyNodeScheduling writes the node selectors and tolerations of the Input
+// into the values of every managed component, at the paths AICR's registry
+// names for it, and returns per component the selector paths the recipe opts
+// out. Like the bundler, it writes before the overrides are merged, so a
+// componentOverrides value wins over what is written here.
+func (s *stack) applyNodeScheduling(scheduling compose.NodeScheduling, registry *recipe.ComponentRegistry) map[string]map[string]bool {
+	optedOut := make(map[string]map[string]bool, len(s.managed))
+	for name, c := range s.managed {
+		if s.values[name] == nil {
+			s.values[name] = make(map[string]any)
+		}
+		optedOut[name] = compose.ApplyNodeScheduling(s.values[name], registry.Get(name), c, scheduling)
+	}
+	return optedOut
+}
+
+// requireNodeSelectors reports every managed component whose registry entry
+// requires a node selector and which deploys without one. It reads the values
+// the component deploys with, its override merged in, as the bundler checks
+// after every override: an override can supply the selector, or clear it.
+func (s *stack) requireNodeSelectors(registry *recipe.ComponentRegistry, optedOut map[string]map[string]bool) []checks.Finding {
+	var findings []checks.Finding
+	for _, name := range slices.Sorted(maps.Keys(s.managed)) {
+		values := s.values[name]
+		if o := s.overrides[name]; o != nil && o.Values != nil {
+			values = compose.MergeValues(values, o.Values)
+		}
+		if err := compose.RequireNodeSelectors(name, values, registry.Get(name), optedOut[name]); err != nil {
+			findings = append(findings, checks.Finding{Component: name, Message: err.Error(), Blocking: true})
+		}
+	}
+	return findings
+}
+
+// refuse turns the findings into results and returns the error that stops
+// the request, if one does. AICR refuses to build a bundle on a blocking
+// finding, and so does the function for a component that is not deployed yet.
+// A component that is already deployed is not refused: its stack was accepted
+// by an earlier version of the function or of the catalog, and refusing now
+// would freeze every other change to it until the finding is resolved, which
+// for a running workload can need more care than an upgrade allows. The
+// finding is a warning then, as is one AICR does not rate blocking.
+func (s *stack) refuse(rsp *fnv1.RunFunctionResponse, findings []checks.Finding) error {
+	var refused error
+	for _, f := range findings {
+		switch {
+		case !f.Blocking:
+			response.Warning(rsp, errors.New(f.Message))
+		case s.isObserved(f.Component):
+			response.Warning(rsp, errors.Errorf("%s; %q is already deployed, so it is not refused", f.Message, f.Component))
+		case refused == nil:
+			refused = errors.New(f.Message)
+		}
+	}
+	return refused
+}
+
+// isObserved reports whether anything the component composes is observed: its
+// Release, or for a manifest-only component one of its Objects.
+func (s *stack) isObserved(name string) bool {
+	if _, ok := s.observed[resource.Name(name)]; ok {
+		return true
+	}
+	for _, o := range s.objects.all(name) {
+		if _, ok := s.observed[resource.Name(o)]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// skippedComponents returns the names the Input leaves out of the recipe.
+func skippedComponents(in *v1beta1.Input) []string {
+	names := make([]string, 0, len(in.SkipComponents))
+	for _, c := range in.SkipComponents {
+		names = append(names, c.Name)
+	}
+	return names
 }
 
 // wireDRAEviction wires AICR's DRA eviction contract into the values of the
@@ -462,6 +572,9 @@ func (s *stack) renderObjects(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		if ns := s.namespaceObject(c, pre, post); ns != "" {
+			pre = append([]string{ns}, pre...)
+		}
 		if len(pre) > 0 {
 			s.objects.pre[name] = pre
 		}
@@ -470,6 +583,33 @@ func (s *stack) renderObjects(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// namespaceObject renders the Object that makes the namespace of a component
+// exist ahead of its manifests, and returns its name, or "" when the component
+// needs none. AICR's bundler installs a component's manifest files as a chart
+// of their own with --create-namespace. Without the same here an Object for a
+// pre-manifest file could never be created, in a namespace that only the
+// component's Release creates, and that Release waits for the Object. The
+// namespace is needed ahead of pre-manifest files, and by a manifest-only
+// component, which has no Release to create it. A recipe that declares the
+// namespace in the component's manifest files keeps its own.
+func (s *stack) namespaceObject(c *recipe.ComponentRef, pre, post []string) string {
+	if len(pre) == 0 && (!c.IsManifestOnlyHelm() || len(post) == 0) {
+		return ""
+	}
+	namespace, _ := compose.Placement(c, s.overrides[c.Name])
+	if namespace == "" {
+		return ""
+	}
+	name := compose.NamespaceObjectName(c.Name, "pre", namespace)
+	for _, declared := range []string{name, compose.NamespaceObjectName(c.Name, "post", namespace)} {
+		if _, ok := s.rendered[declared]; ok {
+			return ""
+		}
+	}
+	s.rendered[name] = compose.NewNamespaceObject(namespace, name, s.pcRef)
+	return name
 }
 
 // renderWave renders the Objects of one wave — pre or post — of a component's

@@ -1,0 +1,13 @@
+apiVersion: e2e.aicr.example.org/v1alpha1
+kind: Stack
+metadata:
+  name: overlay
+  namespace: default
+spec:
+  aicr:
+    criteria:
+      service: kind
+    componentOverrides:
+      e2e-first:
+        values:
+          message: from the composite resource

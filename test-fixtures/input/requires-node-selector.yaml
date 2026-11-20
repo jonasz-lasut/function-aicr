@@ -1,0 +1,10 @@
+apiVersion: aicr.fn.crossplane.io/v1beta1
+kind: Input
+criteria:
+  accelerator: h100
+  service: eks
+  intent: training
+  os: ubuntu
+  platform: slurm
+providerConfigRef:
+  name: gpu-cluster

@@ -1,0 +1,15 @@
+# The move is now asked for by name, which is how a deployed component is
+# relocated.
+apiVersion: e2e.aicr.example.org/v1alpha1
+kind: Stack
+metadata:
+  name: namespace
+  namespace: default
+spec:
+  aicr:
+    criteria:
+      service: kind
+      intent: training
+    componentOverrides:
+      e2e-first:
+        namespace: e2e-first-moved

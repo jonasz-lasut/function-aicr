@@ -1,34 +1,46 @@
 # function-aicr
 
-A [Crossplane Composition Function][functions] that deploys an
-[NVIDIA AI Cluster Runtime (AICR)][aicr] recipe. Name the recipe criteria —
-accelerator, service, intent, OS, platform — and the function resolves the
-matching recipe from AICR's catalog and expands it into namespaced
+A [Crossplane composition function][functions] that deploys an
+[NVIDIA AI Cluster Runtime (AICR)][aicr] recipe. Give it the recipe criteria
+(accelerator, service, intent, OS, platform) and it resolves the matching
+recipe from AICR's catalog. It expands the recipe into namespaced
 [provider-helm][provider-helm] `Release`s and
-[provider-kubernetes][provider-kubernetes] `Object`s targeting a workload
+[provider-kubernetes][provider-kubernetes] `Object`s that target a workload
 cluster, rolled out in AICR's dependency order.
+
+The documentation is at <https://jonasz-lasut.github.io/function-aicr/>.
 
 ## Overview
 
-`function-aicr` is a Crossplane composition function for GPU cluster stacks.
 AICR captures known-good combinations of GPU drivers, operators and platform
-components as version-locked recipes; this function embeds AICR's recipe
+components as version-locked recipes. The function embeds AICR's recipe
 engine and catalog, so there is nothing to install besides the function
-package and the two providers whose resources it composes. See the
-[AICR documentation][aicr-docs] for the recipes themselves.
+package and the providers whose resources it composes.
 
 Each recipe component becomes one `Release` for its Helm chart and one
-`Object` per document of the manifest files it carries. Every composed
-resource is validated against the provider CRD schema Crossplane resolves for
-it before it is emitted, and withheld from the desired state until what AICR
-orders before it reports `Ready`.
+`Object` per document of its manifest files. The function checks each
+composed resource against the provider CRD schema Crossplane resolves for it,
+and withholds it from the desired state until what AICR orders before it
+reports `Ready`.
 
-## Usage
+## Quick start
 
-Use `function-aicr` as a step in a Crossplane Composition pipeline. The
-function takes an `Input` naming the recipe criteria and the provider config
-of the target cluster. A value is either static in the Composition or set by
-the composite resource, through the object `overlayFrom` names:
+Install the function on a control plane that runs Crossplane v2.2 or later,
+with provider-helm and provider-kubernetes:
+
+```yaml
+apiVersion: pkg.crossplane.io/v1
+kind: Function
+metadata:
+  name: function-aicr
+spec:
+  package: ghcr.io/jonasz-lasut/function-aicr:<version>
+```
+
+Use it as a step in a Composition pipeline. The `Input` states the recipe
+criteria and the provider config of the target cluster. A value is either
+static in the Composition or set by the composite resource, through the
+object at `overlayFrom.fieldPath`:
 
 ```yaml
 apiVersion: apiextensions.crossplane.io/v1
@@ -75,487 +87,55 @@ spec:
       intent: training
 ```
 
-The object at `spec.aicr` is shaped like the `Input` and merged over it, so
-the XRD decides which `Input` fields a composite resource controls and the
-function never needs to know the XR's kind. Put
-[function-auto-ready][auto-ready] after `function-aicr`:
-the function gates on the observed readiness of the resources it composes and
-leaves the XR's own readiness to the pipeline.
+The [`example/clusterstack`](example/clusterstack/) directory has the XRD,
+the Composition and composite resources to run through `crossplane render`.
 
-Releases are published as `ghcr.io/jonasz-lasut/function-aicr`, mirrored at
-`xpkg.upbound.io/jonasz-lasut/function-aicr`.
+## Documentation
 
-## Recipe source
-
-By default the function serves the recipe catalog embedded in the `aicr.run`
-module, AICR's Go module, that it was built with: the module version *is* the
-catalog version, and nothing is fetched at runtime.
-
-Two flags overlay that catalog with a digest-pinned OCI recipe artifact,
-pulled **once at startup** so no reconcile ever waits on a registry:
-
-```
---recipe-oci-repository=ghcr.io/acme/aicr-recipes
---recipe-oci-digest=sha256:8ac7f6d54e8bcbf074f156a11f2c8c1ca6dcafed85e880e99a3126c0810cd66f
-```
-
-Set them (or the `RECIPE_OCI_REPOSITORY` / `RECIPE_OCI_DIGEST` environment
-variables) through a [DeploymentRuntimeConfig][deployment-runtime-config]
-referenced by the Function package:
-
-```yaml
-apiVersion: pkg.crossplane.io/v1beta1
-kind: DeploymentRuntimeConfig
-metadata:
-  name: function-aicr
-spec:
-  deploymentTemplate:
-    spec:
-      selector: {}
-      template:
-        spec:
-          containers:
-          - name: package-runtime
-            args:
-            - --recipe-oci-repository=ghcr.io/acme/aicr-recipes
-            - --recipe-oci-digest=sha256:8ac7f6d54e8bcbf074f156a11f2c8c1ca6dcafed85e880e99a3126c0810cd66f
-```
-
-The rules, all AICR's own:
-
-- **Digest-pinned only.** The selector must be the artifact's immutable
-  `sha256:` manifest digest — never a tag — so mutable registry state cannot
-  change what the function deploys. Rolling the catalog forward is a new
-  digest, and rolling back is the old one.
-- **An overlay, not a replacement.** The artifact's files are layered over
-  the embedded catalog (`registry.yaml` is merged), so the artifact only
-  needs to carry what differs. The resolved-recipe summary reports the
-  overlay as `recipeSource` next to the embedded `recipeVersion`.
-- **Fail fast, no fallback.** A pull or validation failure exits the function
-  rather than silently serving embedded data; the pod's restart backoff and
-  logs make the failure visible.
-- **Authored for the embedded AICR release.** The artifact's `registry.yaml`
-  must declare the `apiVersion` that release expects. AICR v1.0.0 retired the
-  alpha versions, so an artifact written for an older release is refused at
-  startup.
-- **Registry access.** Credentials are read from the Docker config
-  (`$DOCKER_CONFIG/config.json` — mount a `dockerconfigjson` Secret and set
-  `DOCKER_CONFIG`), connections are HTTPS with the image's CA bundle (set
-  `SSL_CERT_FILE` for a private CA), and extraction needs a writable
-  temporary directory (`TMPDIR`; mount an `emptyDir` when the container
-  filesystem is read-only).
-
-### Opting in to a mixin
-
-AICR's catalog has opt-in mixins that no stock recipe includes, such as the
-graded NVSentinel remediation steps or `nvsentinel-observability`. A recipe
-takes a mixin only when a catalog overlay lists it, and AICR has no criteria
-value or flag for that, so the recipe source is how a function deployment
-opts in. The artifact needs two small files: a `registry.yaml` with nothing
-but its header, and an overlay that extends the stock recipe.
-
-```yaml
-# registry.yaml
-apiVersion: aicr.run/v1beta1
-kind: ComponentRegistry
-components: []
-```
-
-```yaml
-# overlays/h100-kind-training-observability.yaml
-kind: RecipeMetadata
-apiVersion: aicr.run/v1beta1
-metadata:
-  name: h100-kind-training-observability
-spec:
-  base: h100-kind-training
-  criteria:
-    service: kind
-    accelerator: h100
-    intent: training
-  mixins:
-  - nvsentinel-observability
-```
-
-The overlay names the stock recipe as its `base` and repeats its criteria, so
-every composite resource that resolves that recipe gets the mixin. Publish
-the two files as one gzipped tar layer with AICR's artifact type:
-
-```shell
-tar -czf recipes.tar.gz registry.yaml overlays
-oras push --artifact-type application/vnd.nvidia.aicr.artifact \
-  ghcr.io/acme/aicr-recipes:observability \
-  recipes.tar.gz:application/vnd.oci.image.layer.v1.tar+gzip
-```
-
-`oras` prints the manifest digest to pass as `--recipe-oci-digest`. Build the
-tarball yourself, as above: AICR refuses the layer `oras` packs from a
-directory, because its archive has a `.` entry. With the function running on
-that artifact, the summary lists the overlay under `appliedOverlays` and the
-`nvsentinel` `Release` has the mixin's values.
-
-## Why Crossplane?
-
-AICR renders a recipe into Helm, Argo CD, Flux or Helmfile bundles. Running
-it as a Crossplane composition instead adds what the platform brings:
-
-- **Continuous reconciliation.** The recipe is desired state, not a one-shot
-  bundle. provider-helm and provider-kubernetes keep every `Release` and
-  `Object` converged, so a component that drifts or disappears from the
-  workload cluster is put back, and a change to the recipe rolls out through
-  the same machinery.
-- **One API, many clusters.** Define an XRD of your own shape and let each
-  composite resource name its accelerator, service, intent and target
-  cluster. One Composition serves every workload cluster.
-- **Ordered rollout on observed readiness.** Components are withheld until
-  what AICR orders before them reports `Ready` — read from the providers'
-  observed conditions, not from an install script that returned.
-- **Pipeline composability.** Add functions before or after: derive criteria
-  or overrides from the XR, enforce policy, aggregate readiness — each an
-  independent step that leaves the recipe untouched.
-- **Safe rollouts.** CompositionRevisions let you pin existing stacks to a
-  known-good revision and roll a new recipe version forward incrementally.
-- **Developer experience.** Test locally with `crossplane render`; every
-  composed resource is checked against the real provider CRD schema before
-  it is ever applied.
-
-## How it works
-
-### Input resolution
-
-Every field of the `Input` is static: the value all composite resources get.
-`overlayFrom.fieldPath` names an object on the observed composite resource,
-shaped like the `Input`, that is merged over it:
-
-1. Maps merge key by key and the overlay wins; a static key the overlay
-   doesn't set is kept.
-2. A list in the overlay replaces the static list whole.
-3. An empty string or a null in the overlay counts as unset and keeps the
-   static value: Kubernetes API conventions make `""` and an omitted optional
-   field indistinguishable. Chart values are the exception. Under
-   `componentOverrides.<component>.values` an empty string is a value like
-   any other.
-4. A field path that is absent from the composite resource leaves the static
-   `Input` as it is.
-5. A field path that holds anything but an object, an overlay that sets
-   `overlayFrom`, and a field the `Input` doesn't have are Fatal, never a
-   silent fallback. The static `Input` is decoded as strictly.
-
-The overlay may set any field but `overlayFrom`. What limits it is the XRD:
-Crossplane prunes the fields an XRD doesn't declare, so declare under the
-overlay path exactly the `Input` fields a composite resource should control.
-
-No single criteria dimension is required, but at least one must be set: an
-`Input` with no criteria, as when its overlay misses the composite resource,
-is Fatal rather than a silent deployment of the base recipe. Every unset
-dimension is passed to AICR unstated, so resolution selects the agnostic tier for it; AICR's catalog
-alone decides which combinations exist and rejects a stated value no recipe
-honors.
-
-### Recipe variants and configuration
-
-Two inputs shape a recipe after the criteria have selected it. AICR validates
-both, and rejects either on a recipe it doesn't apply to, so they are natural
-overlay fields: the composite resource that needs one sets it.
-
-`profile` selects a variant the recipe declares, as `{<name>: <value>}`. The
-GKE COS recipes, for example, declare `gpuStack` with `gke-default`,
-`bundle-installer` and `dra`. Unset, the recipe's default variant is deployed.
-
-`configuration` holds typed choices, in the shape of AICR's own recipe
-configuration:
-
-- `gke.tcpxoInterfaces` maps the guest interfaces `eth1` to `eth8` to the
-  cluster's GKE Network objects. The `h100` / `gke` / `cos` / `training` /
-  `kubeflow` recipe requires it, and without it the function is Fatal with
-  AICR's own message.
-- `runtimeInventory.mode` is `enabled` or `disabled`. `enabled` adds
-  `k8s-aibom`, AICR's runtime AI workload inventory, to a GKE recipe that
-  doesn't include it; `disabled` removes it from one that does.
-
-```yaml
-spec:
-  aicr:
-    criteria:
-      accelerator: h100
-      service: gke
-      os: cos
-      intent: training
-      platform: kubeflow
-    profile:
-      gpuStack: dra
-    configuration:
-      gke:
-        tcpxoInterfaces:
-        - interfaceName: eth1
-          network: my-cluster-gpu-nic-0
-        # eth2 to eth8
-```
-
-### Components, charts and manifest files
-
-The function deploys the recipe's Helm components that AICR enables: a
-component an overlay disables stays in AICR's inventory but is never
-composed, exactly as AICR's own deployers treat it. `skipComponents` removes
-further components; a skipped or disabled component that another depends on
-counts as satisfied for gating — the user opted to manage it elsewhere.
-
-`componentClasses` keeps only the components of the classes it names. AICR's
-registry puts every component in one of two: `core` is what a plain GPU pod
-needs to run, and `ops` is everything else, workload platforms included. One
-composite resource can then own the GPU core and another the ops layer. The
-gate sees only its own composite resource, so an `ops` component that depends
-on a `core` one deployed elsewhere doesn't wait for it.
-
-A chart-backed component becomes a `helm.m.crossplane.io/v1beta1` `Release`
-named after the component (`cert-manager`, `gpu-operator`), so the Helm
-release in the target cluster carries that name too; `componentOverrides`
-adjust its chart version, namespace and values. Components also carry
-manifest files — `preManifestFiles` that must exist before the chart and
-`manifestFiles` that follow it; a manifest-only component has no chart at
-all. Those files are Helm-style templates, which the function renders with
-AICR's own renderer from the component's effective namespace, chart, version
-and values (so an override shapes the manifests exactly as it shapes the
-`Release`) and wraps, one document each, in a
-`kubernetes.m.crossplane.io/v1alpha1` `Object` named
-`<component>-<pre|post>-<kind>-<name>`. A file that fails to render or parse
-is Fatal — a recipe is never deployed with a piece silently missing.
-
-A component that is already deployed keeps its namespace. When the recipe
-names another one, as after an AICR release that moves a component's default
-namespace, the function doesn't relocate the live `Release`: it keeps the
-namespace the observed `Release` has and reports it as a Warning. A
-manifest-only component that the recipe places in the namespace of a component
-it depends on follows that component, so a custom resource stays next to its
-operator. To move a component deliberately, set
-`componentOverrides.<component>.namespace`, which always wins.
-
-Composed resource names are deterministic because the dependency gate
-correlates observed against desired resources by them. The consequence is one
-composite resource per target cluster and namespace — which matches the
-one-stack-per-cluster shape of a recipe, whose Helm release names would
-collide in the target cluster anyway.
-
-### Schema validation
-
-Composed resources are built as plain maps, not typed provider structs, so
-the function validates every one against the actual CRD schema Crossplane
-resolves for it, using Crossplane's required-schemas protocol
-(`CAPABILITY_REQUIRED_SCHEMAS`). There are four states:
-
-| State | What Crossplane and the function do |
+| Page | Covers |
 |---|---|
-| Crossplane does not advertise `CAPABILITY_REQUIRED_SCHEMAS` | **Fatal.** The function needs a Crossplane (or `crossplane render` invocation) that supports required schemas. |
-| The function has asked for a schema but Crossplane has not resolved it yet | The function emits **no composed resources** this pass and asks again. Crossplane re-invokes the pipeline once the schema is resolved. |
-| Crossplane resolves the requirement to nothing (no CRD for the GVK) | **Fatal**, e.g. `no schema for helm.m.crossplane.io/v1beta1, Kind=Release: is provider-helm installed?` |
-| Crossplane resolves the requirement to a schema | Every composed resource of that kind is **validated** against it. A violation is Fatal. |
-
-Only the schemas the resolved recipe needs are required: a recipe whose
-manifest files render no document does not oblige you to install
-provider-kubernetes, and one with no charts does not oblige you to install
-provider-helm. With
-`crossplane render`, supply schemas via `--required-schemas=DIR`, a directory
-of JSON files in the OpenAPI v3 document format
-`kubectl get --raw /openapi/v3/<group-version>` returns — see the
-[example README](example/clusterstack/README.md).
-
-### Dependency ordering
-
-Every `Release` sets `spec.forProvider.wait: true`; that is the readiness
-signal the gate reads, since provider-helm reports a `Release` `Ready` only
-once its Helm release's resources are actually up. Unless
-`skipDeploymentOrder: true`, the function withholds composed resources from
-the desired state in the order AICR deploys them:
-
-- a component's pre-manifest `Object`s wait for its managed dependencies
-  (components in this recipe, not skipped) to report `Ready`;
-- its `Release` waits for those dependencies and for its pre-manifest
-  `Object`s;
-- its post-manifest `Object`s wait for its `Release`;
-- a manifest-only component has no `Release`, so all of its `Object`s wait
-  for its dependencies, and its readiness — as somebody else's dependency —
-  is that of every `Object` it emitted.
-
-A resource that has already been observed is never gated: the gate orders
-creation and must never tear down a live resource because a sibling went
-briefly unready.
-
-### DRA eviction for GPU driver upgrades
-
-When the GPU Operator replaces a driver in place, the DRA kubelet plugin has
-to leave the node first. AICR's contract for that spans three components, and
-`draEviction: true` wires it:
-
-- `dra-node-labeler`, whose manifest renders nothing by default, is enabled
-  and labels every GPU node `nvidia.com/dra-kubelet-plugin=true`;
-- `nvidia-dra-driver-gpu` schedules its kubelet plugin only on that label;
-- `gpu-operator` is told the label's key, so its Driver Manager can change
-  the label's value while it replaces the driver, which makes the plugin
-  leave the node, and restore it afterwards.
-
-The wiring is applied after `componentOverrides` and keeps other node
-selectors and environment entries. A recipe without all three components has
-no contract to wire: the function raises a Warning and wires nothing. The
-OpenShift variants of the components aren't covered, as in AICR.
-
-### Upgrade warnings
-
-A pass can change the chart version of a `Release` that is already deployed:
-an AICR release moved the recipe's pin, or an override changed. The function
-looks every such move up in AICR's upgrade records, which rate a recorded move
-`safe`, `manual` or `blocked`; a move no record covers is `unknown`. Anything
-but `safe` raises a Warning on the composite resource with AICR's explanation
-and the summary of each record the move crosses.
-
-The upgrade is still applied. The Warning says that AICR documents steps for
-the move, or that nobody assessed it; the records themselves are in AICR's
-catalog under `recipes/components/<component>/upgrades.yaml`.
-
-### The resolved-recipe summary
-
-When `target.fieldPath` is set, the function writes a summary of the resolved
-recipe to that path on the desired composite resource:
-
-```yaml
-status:
-  aicr:
-    recipeName: h100-kind-training
-    recipeVersion: v1.3.0
-    appliedOverlays:
-    - base
-    - monitoring-hpa
-    - h100-any
-    - kind
-    - h100-kind-training
-    componentCount: 13
-    deployedComponents:
-    - name: nodewright-operator
-      namespace: nodewright
-      version: v0.21.0
-    - name: prometheus-operator-crds
-      namespace: monitoring
-      version: 28.0.1
-    # cert-manager, kube-prometheus-stack and nfd follow
-    pendingComponents:
-    - name: gpu-operator
-      waitingFor: nfd
-    - name: kai-scheduler
-      waitingFor: gpu-operator
-    # six more follow
-```
-
-That is the [example](example/clusterstack/) composite resource once
-`prometheus-operator-crds` is observed `Ready`.
-
-| Key | Meaning |
-|---|---|
-| `recipeName` | The recipe's identifier, built from the criteria. |
-| `recipeVersion` | The `aicr.run` module version the function was built with, which pins the embedded recipe data. |
-| `recipeSource` | The `repository@digest` of the [OCI recipe source](#recipe-source), present only when the function serves one, since the module version alone no longer describes the overlaid catalog. |
-| `profile` | The recipe variant deployed, as `name=value`: the selected one, or the recipe's default. Absent when the recipe declares no profile. |
-| `appliedOverlays` | The catalog overlays the recipe was built from, in order. An overlay an OCI recipe source adds shows up here. |
-| `componentCount` | How many components the recipe deploys for this composite resource. A component that composes no resource isn't counted. |
-| `deployedComponents` | The components the gate isn't withholding, in AICR's deployment order, each with the chart version and namespace it is deployed with. |
-| `pendingComponents` | The components the gate still withholds, each with the dependency or pre-manifest `Object` it waits for. Empty once everything is emitted. |
-
-The keys are set individually, so keys already present at the path survive.
-Crossplane prunes any status field the XRD doesn't declare, so the XRD must
-carry a matching subschema: see
-[`example/clusterstack/definition.yaml`](example/clusterstack/definition.yaml).
-
-## Input reference
-
-The function's input is a KRM-like object of `kind: Input`,
-`apiVersion: aicr.fn.crossplane.io/v1beta1`. Its authoritative source is
-[`input/v1beta1/input.go`](input/v1beta1/input.go); the generated CRD lives at
-[`package/input/aicr.fn.crossplane.io_inputs.yaml`](package/input/aicr.fn.crossplane.io_inputs.yaml).
-
-| Field | Type | Default | Notes |
-|---|---|---|---|
-| `overlayFrom` | object (`OverlayFrom`), optional | unset | Where an overlay of this `Input` is read from. Every other field is static unless the overlay sets it; see [Input resolution](#input-resolution). |
-| `overlayFrom.fieldPath` | string, **required if `overlayFrom` set** | — | A field path on the observed composite resource, e.g. `spec.aicr`, naming an object shaped like this `Input`. |
-| `criteria` | object (`Criteria`), optional | — | AICR recipe criteria. At least one dimension must be set, here or by the overlay. |
-| `criteria.accelerator` | string, optional | `""` | e.g. `h100`, `b200`, `a100`. Validated against AICR's accelerator enum. |
-| `criteria.service` | string, optional | `""` | e.g. `eks`, `gke`, `aks`, `kind`. Validated against AICR's service enum. |
-| `criteria.intent` | string, optional | `""` | `training` or `inference`. |
-| `criteria.os` | string, optional | `""` (unstated) | e.g. `ubuntu`, `cos`, `talos`. Left unstated when neither the `Input` nor its overlay sets it, so AICR selects the OS-agnostic recipe tier. AICR rejects an OS no recipe for the service honors (e.g. `ubuntu` on `kind`), and asks for one when a service+accelerator pair has only OS-specific recipes. |
-| `criteria.platform` | string, optional | `""` | e.g. `kubeflow`, `slurm`, `runai`, `dynamo`, `nim`. |
-| `profile` | `map[string]string`, optional | unset | One recipe variant, keyed by profile name, e.g. `{gpuStack: dra}`. AICR accepts one selection and rejects one on a recipe that declares no profile. |
-| `configuration` | object (`Configuration`), optional | unset | Choices that shape the resolved recipe without selecting it; see [Recipe variants and configuration](#recipe-variants-and-configuration). |
-| `configuration.gke.tcpxoInterfaces` | `[]{interfaceName, network}`, optional | unset | The eight `eth1` to `eth8` GKE Network mappings a recipe with the `torch-distributed-tcpxo` runtime requires. |
-| `configuration.runtimeInventory.mode` | string, optional | unset | `enabled` or `disabled`; adds or removes `k8s-aibom`. |
-| `providerConfigRef` | object (`ProviderConfigRef`), optional | — | The provider config for the target cluster, stamped onto every composed `Release` and `Object`. |
-| `providerConfigRef.kind` | string, optional | `ClusterProviderConfig` | Enum: `ClusterProviderConfig`, `ProviderConfig`. A kind set by the overlay is held to the same two values. |
-| `providerConfigRef.name` | string, **required** | — | From the `Input` or its overlay, so one Composition can target the cluster each composite resource names. |
-| `draEviction` | bool, optional | `false` | Wires AICR's DRA eviction contract across `gpu-operator`, `nvidia-dra-driver-gpu` and `dra-node-labeler`; see [DRA eviction for GPU driver upgrades](#dra-eviction-for-gpu-driver-upgrades). |
-| `skipDeploymentOrder` | bool, optional | `false` | When `true`, every component is emitted at once rather than withheld until its dependencies report `Ready`. |
-| `componentClasses` | `[]string`, optional | `[]` (every class) | Limits the recipe to the components of the named AICR classes, `core` or `ops`. Any other name is Fatal. |
-| `skipComponents` | `[]ComponentRef`, optional | `[]` | Components excluded from the resolved recipe. Each entry is `{name: string}` (`name` required). An entry naming no component of the resolved recipe raises a Warning result — a typo would otherwise silently deploy the component. |
-| `componentOverrides` | `map[string]ComponentOverride`, optional | `{}` | Keyed by component name. An entry for anything not managed — misspelled, skipped, left out by `componentClasses`, or disabled by the recipe — is ignored with a Warning result. |
-| `componentOverrides[name].version` | string, optional | `""` (recipe's version) | Overrides the component's chart version. |
-| `componentOverrides[name].namespace` | string, optional | `""` (recipe's namespace, or the one the component is already deployed in) | Overrides the component's target namespace. It is also how a deployed component is moved to the namespace a newer recipe names. |
-| `componentOverrides[name].values` | object, optional | unset | Deep-merged over the values the recipe resolved; override wins on conflict. Must be an object — any other JSON kind is Fatal on the first reconcile, before any provider schema is requested. |
-| `target` | object (`Target`), optional | unset | Where the resolved-recipe summary is written on the desired composite resource. When unset, no status is written. |
-| `target.fieldPath` | string, **required if `target` set** | — | Must be `"status"` or begin with `"status."`. Names the object that receives the summary keys; sibling keys already there are preserved. |
-
-## Examples
-
-See the [`example/clusterstack`](example/clusterstack/) directory for a
-complete working example — an XRD, a Composition, and composite resources
-that exercise it — with a `crossplane render` walkthrough:
-
-| Example | Description |
-|---------|-------------|
-| [xr.yaml](example/clusterstack/xr.yaml) | An `h100` / `kind` / `training` stack: `prometheus-operator-crds` renders first, `cert-manager` once it is observed `Ready` |
-| [xr-eks.yaml](example/clusterstack/xr-eks.yaml) | An EKS tier whose manifest-only `nodewright-customizations` component renders its NodeWright tuning CR into a provider-kubernetes `Object` |
-| [schemas/](example/clusterstack/schemas/) | Hand-written stand-ins for the `Release` and `Object` CRD schemas that `crossplane render --required-schemas` needs, and how to replace them with the real ones |
-
-See the [example README](example/clusterstack/README.md) for setup
-instructions and the walkthrough.
+| [Install][docs-install] | What the function needs and how to install the package. |
+| [Write a Composition][docs-composition] | The pipeline step, the XRD and the composite resource. |
+| [Values from the composite resource][docs-overlay] | `overlayFrom` and its merge rules. |
+| [Recipe variants and configuration][docs-variants] | `profile` and `configuration`. |
+| [Components and overrides][docs-components] | Which components are deployed, and how to skip or change one. |
+| [Input reference][docs-input] | Every field of the `Input`. |
+| [Recipe source][docs-source] | Serving your own recipe catalog from an OCI registry. |
+| [Rollout order][docs-rollout] | How components are ordered on observed readiness. |
+| [Upgrades][docs-upgrades] | What a new version changes for a running cluster. |
+| [Troubleshooting][docs-troubleshooting] | The function's messages and their causes. |
 
 ## Development
 
 ```shell
-# Run code generation - see input/generate.go and test-fixtures/generate.go
-$ go generate ./...
-
-# Run tests - see fn_test.go
-$ go test ./...
-
-# Lint - see .golangci.yml
-$ golangci-lint run
-
-# Build the function's runtime image - see Dockerfile
-$ docker build . --tag=runtime
-
-# Build a function package - see package/crossplane.yaml
-$ crossplane xpkg build -f package --embed-runtime-image=runtime
+go generate ./...   # the Input CRD and the golden fixtures
+go test ./...
+golangci-lint run
 ```
 
-`go generate ./...` regenerates the `Input` CRD under `package/input/` and the
-golden fixtures under `test-fixtures/want/` — the function's own output for
-the hand-written request fixtures, pinning the exact charts, versions and
-values the embedded recipes resolve to. After bumping `aicr.run`, run it and
-review the diff under `test-fixtures/want/`: it is exactly what
-the function will now deploy. `TestCatalogInvariants` resolves every leaf
-recipe of the embedded catalog and checks the properties the function relies
-on across all of them, so a bump that breaks one fails with the leaf and
-component named. See [AGENTS.md](AGENTS.md) for a full tour of the codebase.
+[Development][docs-development] and [Testing][docs-testing] have the rest,
+and [AGENTS.md](AGENTS.md) is a full tour of the codebase.
 
-## Contributing
-
-We welcome contributions of all kinds — opening issues, improving
-documentation, fixing bugs, or adding new features. If you don't know where
-to start or have any questions, please open an issue.
+Contributions are welcome: open an issue to report a bug, ask a question or
+propose a change.
 
 ## License
 
-Apache 2.0. See [LICENSE](LICENSE) for details.
+Apache 2.0. See [LICENSE](LICENSE).
 
 [functions]: https://docs.crossplane.io/latest/packages/functions/
 [aicr]: https://github.com/NVIDIA/aicr
-[aicr-docs]: https://docs.nvidia.com/aicr
 [provider-helm]: https://github.com/crossplane-contrib/provider-helm
 [provider-kubernetes]: https://github.com/crossplane-contrib/provider-kubernetes
-[auto-ready]: https://github.com/crossplane-contrib/function-auto-ready
-[deployment-runtime-config]: https://docs.crossplane.io/latest/packages/providers/#runtime-configuration
+[docs-install]: https://jonasz-lasut.github.io/function-aicr/authors/install.html
+[docs-composition]: https://jonasz-lasut.github.io/function-aicr/authors/composition.html
+[docs-overlay]: https://jonasz-lasut.github.io/function-aicr/authors/overlay.html
+[docs-variants]: https://jonasz-lasut.github.io/function-aicr/authors/variants.html
+[docs-components]: https://jonasz-lasut.github.io/function-aicr/authors/components.html
+[docs-input]: https://jonasz-lasut.github.io/function-aicr/operators/input-reference.html
+[docs-source]: https://jonasz-lasut.github.io/function-aicr/operators/recipe-source.html
+[docs-rollout]: https://jonasz-lasut.github.io/function-aicr/operators/rollout-order.html
+[docs-upgrades]: https://jonasz-lasut.github.io/function-aicr/operators/upgrades.html
+[docs-troubleshooting]: https://jonasz-lasut.github.io/function-aicr/operators/troubleshooting.html
+[docs-development]: https://jonasz-lasut.github.io/function-aicr/project/development.html
+[docs-testing]: https://jonasz-lasut.github.io/function-aicr/project/testing.html

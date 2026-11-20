@@ -133,6 +133,130 @@ spec:
             type: string
           metadata:
             type: object
+          nodeScheduling:
+            description: |-
+              NodeScheduling places the recipe's components on the cluster's node
+              pools. AICR's registry names, per component, the chart values that take
+              a node selector or tolerations for system workloads and for workloads
+              on accelerated nodes; what is set here is written to those values.
+            properties:
+              accelerated:
+                description: |-
+                  Accelerated places the workloads that run on accelerated nodes: device
+                  plugins, drivers, exporters.
+                properties:
+                  nodeSelector:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      NodeSelector replaces the node selector of every chart value AICR's
+                      registry names for this kind of workload. A component whose registry
+                      entry requires a selector is refused without one.
+                    type: object
+                  tolerations:
+                    description: |-
+                      Tolerations replace the tolerations of those chart values, and are
+                      appended where the recipe sets tolerations of its own. A recipe that
+                      sets an empty list keeps the chart's.
+                    items:
+                      description: |-
+                        The pod this Toleration is attached to tolerates any taint that matches
+                        the triple <key,value,effect> using the matching operator <operator>.
+                      properties:
+                        effect:
+                          description: |-
+                            Effect indicates the taint effect to match. Empty means match all taint effects.
+                            When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                          type: string
+                        key:
+                          description: |-
+                            Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                            If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                          type: string
+                        operator:
+                          description: |-
+                            Operator represents a key's relationship to the value.
+                            Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
+                            Exists is equivalent to wildcard for value, so that a pod can
+                            tolerate all taints of a particular category.
+                            Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
+                          type: string
+                        tolerationSeconds:
+                          description: |-
+                            TolerationSeconds represents the period of time the toleration (which must be
+                            of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                            it is not set, which means tolerate the taint forever (do not evict). Zero and
+                            negative values will be treated as 0 (evict immediately) by the system.
+                          format: int64
+                          type: integer
+                        value:
+                          description: |-
+                            Value is the taint value the toleration matches to.
+                            If the operator is Exists, the value should be empty, otherwise just a regular string.
+                          type: string
+                      type: object
+                    type: array
+                    x-kubernetes-list-type: atomic
+                type: object
+              system:
+                description: |-
+                  System places the workloads that need no accelerator: operators,
+                  controllers, webhooks.
+                properties:
+                  nodeSelector:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      NodeSelector replaces the node selector of every chart value AICR's
+                      registry names for this kind of workload. A component whose registry
+                      entry requires a selector is refused without one.
+                    type: object
+                  tolerations:
+                    description: |-
+                      Tolerations replace the tolerations of those chart values, and are
+                      appended where the recipe sets tolerations of its own. A recipe that
+                      sets an empty list keeps the chart's.
+                    items:
+                      description: |-
+                        The pod this Toleration is attached to tolerates any taint that matches
+                        the triple <key,value,effect> using the matching operator <operator>.
+                      properties:
+                        effect:
+                          description: |-
+                            Effect indicates the taint effect to match. Empty means match all taint effects.
+                            When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                          type: string
+                        key:
+                          description: |-
+                            Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                            If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                          type: string
+                        operator:
+                          description: |-
+                            Operator represents a key's relationship to the value.
+                            Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
+                            Exists is equivalent to wildcard for value, so that a pod can
+                            tolerate all taints of a particular category.
+                            Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
+                          type: string
+                        tolerationSeconds:
+                          description: |-
+                            TolerationSeconds represents the period of time the toleration (which must be
+                            of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                            it is not set, which means tolerate the taint forever (do not evict). Zero and
+                            negative values will be treated as 0 (evict immediately) by the system.
+                          format: int64
+                          type: integer
+                        value:
+                          description: |-
+                            Value is the taint value the toleration matches to.
+                            If the operator is Exists, the value should be empty, otherwise just a regular string.
+                          type: string
+                      type: object
+                    type: array
+                    x-kubernetes-list-type: atomic
+                type: object
+            type: object
           overlayFrom:
             description: |-
               OverlayFrom names an object on the observed composite resource that is

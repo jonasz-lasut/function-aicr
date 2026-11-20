@@ -1,0 +1,16 @@
+# e2e-first's pod is given a node selector no node matches, so its Release
+# stays short of ready until the feature labels the node.
+apiVersion: e2e.aicr.example.org/v1alpha1
+kind: Stack
+metadata:
+  name: order
+  namespace: default
+spec:
+  aicr:
+    criteria:
+      service: kind
+    componentOverrides:
+      e2e-first:
+        values:
+          nodeSelector:
+            e2e.aicr.example.org/first: ready

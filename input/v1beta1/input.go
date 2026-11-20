@@ -5,6 +5,7 @@
 package v1beta1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -55,6 +56,13 @@ type Input struct {
 	// +optional
 	ProviderConfigRef *ProviderConfigRef `json:"providerConfigRef,omitempty"`
 
+	// NodeScheduling places the recipe's components on the cluster's node
+	// pools. AICR's registry names, per component, the chart values that take
+	// a node selector or tolerations for system workloads and for workloads
+	// on accelerated nodes; what is set here is written to those values.
+	// +optional
+	NodeScheduling *NodeScheduling `json:"nodeScheduling,omitempty"`
+
 	// DRAEviction wires AICR's DRA eviction contract, so the GPU Operator can
 	// evict the DRA kubelet plugin ahead of an in-place GPU driver upgrade:
 	// dra-node-labeler is enabled and labels every GPU node, the plugin is
@@ -102,6 +110,36 @@ type Criteria struct {
 	OS string `json:"os,omitempty"`
 	// +optional
 	Platform string `json:"platform,omitempty"`
+}
+
+// NodeScheduling holds the placement of the two kinds of workload AICR's
+// registry tells apart.
+type NodeScheduling struct {
+	// System places the workloads that need no accelerator: operators,
+	// controllers, webhooks.
+	// +optional
+	System *NodePlacement `json:"system,omitempty"`
+
+	// Accelerated places the workloads that run on accelerated nodes: device
+	// plugins, drivers, exporters.
+	// +optional
+	Accelerated *NodePlacement `json:"accelerated,omitempty"`
+}
+
+// NodePlacement is where a kind of workload may run.
+type NodePlacement struct {
+	// NodeSelector replaces the node selector of every chart value AICR's
+	// registry names for this kind of workload. A component whose registry
+	// entry requires a selector is refused without one.
+	// +optional
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+
+	// Tolerations replace the tolerations of those chart values, and are
+	// appended where the recipe sets tolerations of its own. A recipe that
+	// sets an empty list keeps the chart's.
+	// +optional
+	// +listType=atomic
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 }
 
 // Configuration holds choices that shape the resolved recipe without

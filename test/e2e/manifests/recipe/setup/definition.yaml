@@ -1,0 +1,33 @@
+# The composite resource the suite's features create. `spec.aicr` is the
+# function's overlay and `status.aicr` its summary; both are left open, so a
+# feature sets any Input field without a change here.
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: stacks.e2e.aicr.example.org
+spec:
+  scope: Namespaced
+  group: e2e.aicr.example.org
+  names:
+    kind: Stack
+    plural: stacks
+  versions:
+  - name: v1alpha1
+    served: true
+    referenceable: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              aicr:
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+          status:
+            type: object
+            properties:
+              aicr:
+                type: object
+                x-kubernetes-preserve-unknown-fields: true

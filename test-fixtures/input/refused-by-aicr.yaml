@@ -1,0 +1,10 @@
+apiVersion: aicr.fn.crossplane.io/v1beta1
+kind: Input
+criteria:
+  accelerator: h100
+  service: aks
+  intent: training
+  os: ubuntu
+  platform: kubeflow
+providerConfigRef:
+  name: gpu-cluster
