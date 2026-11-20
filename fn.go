@@ -144,10 +144,30 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 	}
 
 	managed := managedComponents(rsp, res, in)
+	values, err := resolveValues(ctx, res, managed)
+	if err != nil {
+		response.Fatal(rsp, err)
+		return rsp, nil
+	}
 
-	// Only require what this recipe actually composes. A recipe with no manifest
-	// files must not oblige the user to install provider-kubernetes.
-	needRelease, needObject := needs(managed)
+	s := &stack{
+		managed:      managed,
+		values:       values,
+		overrides:    overrides,
+		pcRef:        pcRef,
+		dp:           f.dp,
+		recipeSource: f.recipeSource,
+	}
+	if err := s.renderObjects(ctx); err != nil {
+		response.Fatal(rsp, err)
+		return rsp, nil
+	}
+
+	// Only require what this recipe actually composes. A recipe whose manifest
+	// files render no document must not oblige the user to install
+	// provider-kubernetes, so the manifests are rendered before the schemas
+	// are required.
+	needRelease, needObject := s.needs()
 	if needRelease {
 		releaseKind.require(rsp)
 	}
@@ -155,13 +175,12 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 		objectKind.require(rsp)
 	}
 
-	releaseSchema, relResolved, err := releaseKind.validator(req, needRelease)
-	if err != nil {
+	var relResolved, objResolved bool
+	if s.releaseSchema, relResolved, err = releaseKind.validator(req, needRelease); err != nil {
 		response.Fatal(rsp, err)
 		return rsp, nil
 	}
-	objectSchema, objResolved, err := objectKind.validator(req, needObject)
-	if err != nil {
+	if s.objectSchema, objResolved, err = objectKind.validator(req, needObject); err != nil {
 		response.Fatal(rsp, err)
 		return rsp, nil
 	}
@@ -171,39 +190,19 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 		return rsp, nil
 	}
 
-	desired, err := request.GetDesiredComposedResources(req)
-	if err != nil {
+	if s.desired, err = request.GetDesiredComposedResources(req); err != nil {
 		response.Fatal(rsp, errors.Wrapf(err, "cannot get desired composed resources from %T", req))
 		return rsp, nil
 	}
-	observed, err := request.GetObservedComposedResources(req)
-	if err != nil {
+	if s.observed, err = request.GetObservedComposedResources(req); err != nil {
 		response.Fatal(rsp, errors.Wrapf(err, "cannot get observed composed resources from %T", req))
 		return rsp, nil
-	}
-	values, err := resolveValues(ctx, res, managed)
-	if err != nil {
-		response.Fatal(rsp, err)
-		return rsp, nil
-	}
-
-	s := &stack{
-		managed:       managed,
-		values:        values,
-		overrides:     overrides,
-		pcRef:         pcRef,
-		dp:            f.dp,
-		recipeSource:  f.recipeSource,
-		releaseSchema: releaseSchema,
-		objectSchema:  objectSchema,
-		desired:       desired,
-		observed:      observed,
 	}
 	if err := s.composeReleases(); err != nil {
 		response.Fatal(rsp, err)
 		return rsp, nil
 	}
-	if err := s.composeObjects(ctx); err != nil {
+	if err := s.composeObjects(); err != nil {
 		response.Fatal(rsp, err)
 		return rsp, nil
 	}
@@ -241,11 +240,14 @@ type stack struct {
 	dp            recipe.DataProvider // holds the components' manifest files
 	recipeSource  string              // the OCI overlay's repository@digest; empty for embedded-only data
 	releaseSchema *schema.Validator   // nil when no component has a chart
-	objectSchema  *schema.Validator   // nil when no component has manifest files
+	objectSchema  *schema.Validator   // nil when no manifest file renders a document
 
 	desired  map[resource.Name]*resource.DesiredComposed
 	observed map[resource.Name]resource.ObservedComposed
-	// objects indexes, per component, the names of the Objects composed for
+	// rendered holds, by name, the Objects the components' manifest files
+	// render into, before they are validated and composed into desired.
+	rendered map[string]map[string]any
+	// objects indexes, per component, the names of the Objects rendered for
 	// its pre-manifest and post-manifest files. The gate correlates observed
 	// against desired resources by these names.
 	objects manifestObjects
@@ -283,24 +285,25 @@ func (s *stack) composeReleases() error {
 	return nil
 }
 
-// composeObjects renders every manifest file of every managed component with
+// renderObjects renders every manifest file of every managed component with
 // the component's effective values — AICR manifest files are Helm-style
-// templates, rendered here exactly as AICR's bundler renders them — and adds a
-// provider-kubernetes Object per resulting document to desired, validated
-// against the Object schema. The Object names are indexed per component in
+// templates, rendered here exactly as AICR's bundler renders them — into a
+// provider-kubernetes Object per resulting document, held in rendered until
+// composeObjects validates it. The Object names are indexed per component in
 // objects, split into pre-manifest and post-manifest, for the gate. A file
-// that renders to no document (its template gated everything off) composes
+// that renders to no document (its template gated everything off) yields
 // nothing; a file that fails to render or parse is an error, never a silently
 // missing piece of the recipe.
-func (s *stack) composeObjects(ctx context.Context) error {
+func (s *stack) renderObjects(ctx context.Context) error {
+	s.rendered = make(map[string]map[string]any)
 	s.objects = manifestObjects{pre: make(map[string][]string), post: make(map[string][]string)}
 	for _, name := range slices.Sorted(maps.Keys(s.managed)) {
 		c := s.managed[name]
-		pre, err := s.composeWave(ctx, c, "pre", c.PreManifestFiles)
+		pre, err := s.renderWave(ctx, c, "pre", c.PreManifestFiles)
 		if err != nil {
 			return err
 		}
-		post, err := s.composeWave(ctx, c, "post", c.ManifestFiles)
+		post, err := s.renderWave(ctx, c, "post", c.ManifestFiles)
 		if err != nil {
 			return err
 		}
@@ -314,9 +317,9 @@ func (s *stack) composeObjects(ctx context.Context) error {
 	return nil
 }
 
-// composeWave composes the Objects of one wave — pre or post — of a component's
+// renderWave renders the Objects of one wave — pre or post — of a component's
 // manifest files and returns their names, in document order.
-func (s *stack) composeWave(ctx context.Context, c *recipe.ComponentRef, wave string, paths []string) ([]string, error) {
+func (s *stack) renderWave(ctx context.Context, c *recipe.ComponentRef, wave string, paths []string) ([]string, error) {
 	var names []string
 	for _, path := range paths {
 		data, err := recipe.GetManifestContentWithContext(ctx, s.dp, path)
@@ -333,15 +336,24 @@ func (s *stack) composeWave(ctx context.Context, c *recipe.ComponentRef, wave st
 		}
 		for _, doc := range docs {
 			name := compose.ManifestObjectName(c.Name, wave, doc, len(names))
-			obj := compose.NewObject(doc, name, s.pcRef)
-			if err := s.objectSchema.Validate(obj); err != nil {
-				return nil, errors.Wrapf(err, "invalid Object %q", name)
-			}
-			s.desired[resource.Name(name)] = &resource.DesiredComposed{Resource: toComposed(obj)}
+			s.rendered[name] = compose.NewObject(doc, name, s.pcRef)
 			names = append(names, name)
 		}
 	}
 	return names, nil
+}
+
+// composeObjects adds the rendered Objects to desired, validated against the
+// Object schema.
+func (s *stack) composeObjects() error {
+	for _, name := range slices.Sorted(maps.Keys(s.rendered)) {
+		obj := s.rendered[name]
+		if err := s.objectSchema.Validate(obj); err != nil {
+			return errors.Wrapf(err, "invalid Object %q", name)
+		}
+		s.desired[resource.Name(name)] = &resource.DesiredComposed{Resource: toComposed(obj)}
+	}
+	return nil
 }
 
 // gate withholds composed resources whose prerequisites are not yet observed
@@ -540,17 +552,16 @@ func (m manifestObjects) all(name string) []string {
 	return slices.Concat(m.pre[name], m.post[name])
 }
 
-// needs reports whether the managed components yield any Release and any Object.
-func needs(managed map[string]*recipe.ComponentRef) (release, object bool) {
-	for _, c := range managed {
+// needs reports whether the stack composes any Release and any Object. A
+// component whose manifest files all render to no document needs no Object.
+func (s *stack) needs() (release, object bool) {
+	for _, c := range s.managed {
 		if !c.IsManifestOnlyHelm() {
 			release = true
-		}
-		if len(c.PreManifestFiles) > 0 || len(c.ManifestFiles) > 0 {
-			object = true
+			break
 		}
 	}
-	return release, object
+	return release, len(s.rendered) > 0
 }
 
 // managedComponents indexes the resolved, enabled, not-skipped Helm components

@@ -242,9 +242,10 @@ resolves for it, using Crossplane's required-schemas protocol
 | Crossplane resolves the requirement to nothing (no CRD for the GVK) | **Fatal**, e.g. `no schema for helm.m.crossplane.io/v1beta1, Kind=Release: is provider-helm installed?` |
 | Crossplane resolves the requirement to a schema | Every composed resource of that kind is **validated** against it. A violation is Fatal. |
 
-Only the schemas the resolved recipe needs are required: a recipe with no
-manifest files does not oblige you to install provider-kubernetes, and one
-with no charts does not oblige you to install provider-helm. With
+Only the schemas the resolved recipe needs are required: a recipe whose
+manifest files render no document does not oblige you to install
+provider-kubernetes, and one with no charts does not oblige you to install
+provider-helm. With
 `crossplane render`, supply schemas via `--required-schemas=DIR`, a directory
 of JSON files in the OpenAPI v3 document format
 `kubectl get --raw /openapi/v3/<group-version>` returns — see the

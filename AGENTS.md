@@ -48,18 +48,19 @@ Crossplane RunFunctionRequest
 │  4. recipe.NewBuilder(...).BuildFromCriteria → RecipeResult          │
 │  5. managedComponents: enabled, not skipped, Helm-typed refs         │
 │     (Warnings for skip/override names that match nothing)            │
-│  6. needs(managed) → RequireSchema("release") / ("object") as needed │
+│  6. resolveValues: effective values per component                    │
+│  7. stack.renderObjects: per component, per wave (pre/post):         │
+│       manifest file → RenderManifest → SplitManifests →              │
+│       ManifestObjectName → NewObject → rendered                      │
+│  8. stack.needs → RequireSchema("release") / ("object") as needed    │
 │     composedKind.validator: not yet resolved → return with no        │
 │     resources; resolved to nil → Fatal "is provider-… installed?"    │
-│  7. resolveValues: effective values per component                    │
-│  8. stack.composeReleases: NewRelease → Validate → desired           │
-│     stack.composeObjects: per component, per wave (pre/post):        │
-│       manifest file → RenderManifest → SplitManifests →              │
-│       ManifestObjectName → NewObject → Validate → desired            │
-│  9. stack.gate (unless skipDeploymentOrder): withhold from desired   │
+│  9. stack.composeReleases: NewRelease → Validate → desired           │
+│     stack.composeObjects: rendered → Validate → desired              │
+│ 10. stack.gate (unless skipDeploymentOrder): withhold from desired   │
 │     what is not yet allowed by observed readiness                    │
-│ 10. SetDesiredComposedResources; if target: setStatus(summary)       │
-│ 11. ConditionTrue FunctionSuccess                                    │
+│ 11. SetDesiredComposedResources; if target: setStatus(summary)       │
+│ 12. ConditionTrue FunctionSuccess                                    │
 └──────────────────────────────────────────────────────────────────────┘
     ↓
 Crossplane RunFunctionResponse (desired resources + requirements + XR status)
@@ -68,7 +69,7 @@ Crossplane RunFunctionResponse (desired resources + requirements + XR status)
 ### Key Components
 
 ```
-fn.go                             RunFunction, the stack type (compose, gate, summary),
+fn.go                             RunFunction, the stack type (render, compose, gate, summary),
                                   managedComponents, parseOverrides, setStatus, recipeName
 main.go                           kong CLI, DataProvider (embedded, or the OCI overlay from
                                   the --recipe-oci-* flags), aicrVersion/moduleVersion
@@ -196,7 +197,7 @@ Two invariants: readiness is read from `observed`, never from `desired[...].Read
 
 ### Required schemas
 
-`composedKind` (fn.go) wraps the protocol for the two kinds. Only kinds the recipe needs are required (`needs(managed)`), so a recipe without manifest files does not force provider-kubernetes to be installed. Decision table: capability absent → Fatal; requirement unresolved → return with no composed resources (Crossplane calls again); resolved to nil → Fatal naming the provider; resolved → `schema.NewValidator` once per kind, `Validate` every resource, violation Fatal.
+`composedKind` (fn.go) wraps the protocol for the two kinds. Only kinds the recipe composes are required: `stack.needs` runs after `stack.renderObjects`, so a recipe whose manifest files render no document does not force provider-kubernetes to be installed. In the aicr v1.3.0 catalog 78 of the 81 leaf recipes include the manifest-only `dra-node-labeler`, whose manifest renders nothing unless its `enabled` value is true. Decision table: capability absent → Fatal; requirement unresolved → return with no composed resources (Crossplane calls again); resolved to nil → Fatal naming the provider; resolved → `schema.NewValidator` once per kind, `Validate` every resource, violation Fatal.
 
 ### The resolved-recipe summary
 

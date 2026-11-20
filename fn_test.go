@@ -263,7 +263,7 @@ func TestRunFunction(t *testing.T) {
 			},
 		},
 		"RendersManifestsIntoObjects": {
-			reason: "A component's manifest files are Helm-style templates; they are rendered with the recipe's values and emitted as Objects — here the manifest-only nodewright-customizations' NodeWright CR next to nodewright-operator's Release — and the Object schema is required only because the recipe carries manifests.",
+			reason: "A component's manifest files are Helm-style templates; they are rendered with the recipe's values and emitted as Objects — here the manifest-only nodewright-customizations' NodeWright CR next to nodewright-operator's Release — and the Object schema is required only because a manifest file renders a document.",
 			args: args{
 				ctx: context.Background(),
 				req: &fnv1.RunFunctionRequest{
@@ -283,6 +283,26 @@ func TestRunFunction(t *testing.T) {
 					Conditions:   []*fnv1.Condition{functionSuccess()},
 				},
 				golden: golden{resources: "render-manifests"},
+			},
+		},
+		"RequiresNoObjectSchemaWhenManifestsRenderNothing": {
+			reason: "dra-node-labeler is manifest-only and its one manifest file renders no document unless enabled; a component that composes no Object must not make the function require the Object schema, or every recipe would oblige the user to install provider-kubernetes.",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:            meta(),
+					Input:           yamlToProto("input/manifest-renders-nothing.yaml"),
+					Observed:        &fnv1.State{Composite: fixture("observed/xr.yaml")},
+					RequiredSchemas: map[string]*fnv1.Schema{"release": permissiveSchema()},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta:         respMeta,
+					Requirements: releaseRequirement(),
+					Conditions:   []*fnv1.Condition{functionSuccess()},
+				},
+				golden: golden{resources: "resolve"},
 			},
 		},
 		"WritesSummaryToTarget": {
@@ -717,8 +737,11 @@ func TestCatalogInvariants(t *testing.T) {
 			if err := s.composeReleases(); err != nil {
 				t.Fatalf("composeReleases(): %v", err)
 			}
-			if err := s.composeObjects(ctx); err != nil {
-				t.Fatalf("composeObjects(...): %v", err)
+			if err := s.renderObjects(ctx); err != nil {
+				t.Fatalf("renderObjects(...): %v", err)
+			}
+			if err := s.composeObjects(); err != nil {
+				t.Fatalf("composeObjects(): %v", err)
 			}
 			releases, emitted := 0, 0
 			for _, name := range slices.Sorted(maps.Keys(managed)) {
