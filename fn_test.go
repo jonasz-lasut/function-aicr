@@ -368,6 +368,26 @@ func TestRunFunction(t *testing.T) {
 				golden: golden{resources: "runtime-inventory"},
 			},
 		},
+		"DeploysOnlyTheNamedComponentClasses": {
+			reason: "With componentClasses [core] the ops component the fixture does not skip, kai-scheduler, is left out and the core ones are composed.",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:            meta(),
+					Input:           yamlToProto("input/component-classes.yaml"),
+					Observed:        &fnv1.State{Composite: fixture("observed/xr.yaml")},
+					RequiredSchemas: map[string]*fnv1.Schema{"release": permissiveSchema()},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta:         respMeta,
+					Requirements: releaseRequirement(),
+					Conditions:   []*fnv1.Condition{functionSuccess()},
+				},
+				golden: golden{resources: "component-classes"},
+			},
+		},
 		"WritesSummaryToTarget": {
 			reason: "With target set, the resolved-recipe summary lands at the named field path on the desired XR.",
 			args: args{
@@ -591,6 +611,23 @@ func TestRunFunction(t *testing.T) {
 				},
 			},
 		},
+		"FatalWhenComponentClassUnknown": {
+			reason: "A misspelled class would filter out every component and report a recipe that deploys nothing as a success.",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:     meta(),
+					Input:    yamlToProto("input/unknown-component-class.yaml"),
+					Observed: &fnv1.State{Composite: fixture("observed/xr.yaml")},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta:    respMeta,
+					Results: fatal(`componentClasses names "cor", which is not an AICR component class (core, ops)`),
+				},
+			},
+		},
 		"FatalWhenTargetNotUnderStatus": {
 			reason: "Writing outside status would corrupt the desired composite's spec.",
 			args: args{
@@ -761,7 +798,7 @@ func TestCatalogInvariants(t *testing.T) {
 			}
 
 			rsp := &fnv1.RunFunctionResponse{}
-			managed := managedComponents(rsp, res, &v1beta1.Input{})
+			managed := managedComponents(rsp, res, &v1beta1.Input{}, nil)
 			for _, r := range rsp.GetResults() {
 				if r.GetSeverity() == fnv1.Severity_SEVERITY_WARNING {
 					t.Errorf("managedComponents(...) warned with no skips or overrides configured: %s", r.GetMessage())
@@ -1171,9 +1208,19 @@ func TestManagedComponents(t *testing.T) {
 		{Name: "nfd", Type: recipe.ComponentTypeHelm, Source: "https://kubernetes-sigs.github.io/node-feature-discovery/charts", Chart: "node-feature-discovery", Overrides: map[string]any{"enabled": false}},
 		{Name: "kustomized", Type: recipe.ComponentTypeKustomize, Source: "https://example.com/repo", Path: "overlays/prod"},
 	}}
+	// The class of a component comes from AICR's registry: cert-manager and
+	// gpu-operator are core there.
+	registry, err := recipe.GetComponentRegistryFor(embeddedDataProvider())
+	if err != nil {
+		t.Fatalf("recipe.GetComponentRegistryFor(...): %v", err)
+	}
+	withOps := &recipe.RecipeResult{ComponentRefs: append(slices.Clone(res.ComponentRefs),
+		recipe.ComponentRef{Name: "kai-scheduler", Type: recipe.ComponentTypeHelm, Source: "oci://ghcr.io/kai-scheduler", Chart: "kai-scheduler"},
+	)}
 
 	type args struct {
-		in *v1beta1.Input
+		res *recipe.RecipeResult
+		in  *v1beta1.Input
 	}
 	type want struct {
 		managed []string
@@ -1210,6 +1257,28 @@ func TestManagedComponents(t *testing.T) {
 				results: []*fnv1.Result{warning(`skipComponents names %q, which is not a component of the resolved recipe; check the spelling`, "gpu-operatr")},
 			},
 		},
+		"OnlyTheNamedClassesAreManaged": {
+			reason: "componentClasses keeps the components whose class in AICR's registry it names, so the core GPU stack and the ops layer can be owned by separate composite resources; an override for a component it leaves out is reported like any other unmanaged one.",
+			args: args{
+				res: withOps,
+				in: &v1beta1.Input{
+					ComponentClasses:   []string{"core"},
+					SkipComponents:     []v1beta1.ComponentRef{{Name: "kustomized"}},
+					ComponentOverrides: map[string]v1beta1.ComponentOverride{"kai-scheduler": {Version: "v99.0.0"}},
+				},
+			},
+			want: want{
+				managed: []string{"cert-manager", "gpu-operator"},
+				results: []*fnv1.Result{
+					warning(`componentOverrides[%q] names no managed component of the resolved recipe (skipped, left out by componentClasses, disabled by the recipe, or misspelled); the override is ignored`, "kai-scheduler"),
+				},
+			},
+		},
+		"EveryClassIsManagedByDefault": {
+			reason: "Without componentClasses the class of a component does not matter.",
+			args:   args{res: withOps, in: &v1beta1.Input{SkipComponents: []v1beta1.ComponentRef{{Name: "kustomized"}}}},
+			want:   want{managed: []string{"cert-manager", "gpu-operator", "kai-scheduler"}},
+		},
 		"UnmanagedOverrideWarns": {
 			reason: "A componentOverrides entry for anything not managed — misspelled, skipped, or disabled by the recipe — is silently ignored otherwise; warnings are sorted by name.",
 			args: args{in: &v1beta1.Input{
@@ -1223,8 +1292,8 @@ func TestManagedComponents(t *testing.T) {
 			want: want{
 				managed: []string{"cert-manager", "gpu-operator"},
 				results: []*fnv1.Result{
-					warning(`componentOverrides[%q] names no managed component of the resolved recipe (skipped, disabled by the recipe, or misspelled); the override is ignored`, "gpu-operatr"),
-					warning(`componentOverrides[%q] names no managed component of the resolved recipe (skipped, disabled by the recipe, or misspelled); the override is ignored`, "mariadb-operator"),
+					warning(`componentOverrides[%q] names no managed component of the resolved recipe (skipped, left out by componentClasses, disabled by the recipe, or misspelled); the override is ignored`, "gpu-operatr"),
+					warning(`componentOverrides[%q] names no managed component of the resolved recipe (skipped, left out by componentClasses, disabled by the recipe, or misspelled); the override is ignored`, "mariadb-operator"),
 				},
 			},
 		},
@@ -1233,8 +1302,12 @@ func TestManagedComponents(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			rsp := &fnv1.RunFunctionResponse{}
+			in := tc.args.res
+			if in == nil {
+				in = res
+			}
 
-			got := managedComponents(rsp, res, tc.args.in)
+			got := managedComponents(rsp, in, tc.args.in, registry)
 
 			if diff := cmp.Diff(tc.want.managed, slices.Sorted(maps.Keys(got))); diff != "" {
 				t.Errorf("%s\nmanagedComponents(...): -want managed, +got managed:\n%s", tc.reason, diff)

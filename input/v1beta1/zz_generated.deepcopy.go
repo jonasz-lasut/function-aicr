@@ -135,6 +135,11 @@ func (in *Input) DeepCopyInto(out *Input) {
 		*out = new(ProviderConfigRef)
 		**out = **in
 	}
+	if in.ComponentClasses != nil {
+		in, out := &in.ComponentClasses, &out.ComponentClasses
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.SkipComponents != nil {
 		in, out := &in.SkipComponents, &out.SkipComponents
 		*out = make([]ComponentRef, len(*in))

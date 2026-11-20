@@ -48,6 +48,8 @@ providerConfigRef:
   kind: ClusterProviderConfig
   name: gpu-cluster
 skipDeploymentOrder: true
+componentClasses:
+- core
 skipComponents:
 - name: cert-manager
 componentOverrides:
@@ -80,6 +82,7 @@ target:
 					Name: "gpu-cluster",
 				},
 				SkipDeploymentOrder: true,
+				ComponentClasses:    []string{"core"},
 				SkipComponents:      []ComponentRef{{Name: "cert-manager"}},
 				ComponentOverrides: map[string]ComponentOverride{
 					"gpu-operator": {

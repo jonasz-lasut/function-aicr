@@ -149,7 +149,17 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 		return rsp, nil
 	}
 
-	managed := managedComponents(rsp, res, in)
+	if err := validateClasses(in); err != nil {
+		response.Fatal(rsp, err)
+		return rsp, nil
+	}
+	registry, err := recipe.GetComponentRegistryFor(f.dp)
+	if err != nil {
+		response.Fatal(rsp, errors.Wrap(err, "cannot load AICR's component registry"))
+		return rsp, nil
+	}
+
+	managed := managedComponents(rsp, res, in, registry)
 	values, err := resolveValues(ctx, res, managed)
 	if err != nil {
 		response.Fatal(rsp, err)
@@ -573,13 +583,19 @@ func (s *stack) needs() (release, object bool) {
 // managedComponents indexes the resolved, enabled, not-skipped Helm components
 // by name. Components the recipe disables (an overlay set overrides.enabled or
 // overrides.install to false) stay in AICR's inventory but are never deployed,
-// exactly as AICR's own deployers treat them. A skipComponents or
-// componentOverrides entry that names nothing is reported as a warning: a typo
-// there would otherwise silently deploy the component, or drop the override.
-func managedComponents(rsp *fnv1.RunFunctionResponse, res *recipe.RecipeResult, in *v1beta1.Input) map[string]*recipe.ComponentRef {
+// exactly as AICR's own deployers treat them. componentClasses, when set,
+// keeps only the components whose class in AICR's registry it names. A
+// skipComponents or componentOverrides entry that names nothing is reported as
+// a warning: a typo there would otherwise silently deploy the component, or
+// drop the override.
+func managedComponents(rsp *fnv1.RunFunctionResponse, res *recipe.RecipeResult, in *v1beta1.Input, registry *recipe.ComponentRegistry) map[string]*recipe.ComponentRef {
 	skip := make(map[string]bool, len(in.SkipComponents))
 	for _, c := range in.SkipComponents {
 		skip[c.Name] = true
+	}
+	classes := make(map[recipe.ComponentClass]bool, len(in.ComponentClasses))
+	for _, c := range in.ComponentClasses {
+		classes[recipe.ComponentClass(c)] = true
 	}
 
 	inRecipe := make(map[string]bool, len(res.ComponentRefs))
@@ -588,6 +604,9 @@ func managedComponents(rsp *fnv1.RunFunctionResponse, res *recipe.RecipeResult, 
 		c := &res.ComponentRefs[i]
 		inRecipe[c.Name] = true
 		if !c.IsEnabled() || skip[c.Name] {
+			continue
+		}
+		if len(classes) > 0 && !classes[registry.Get(c.Name).GetClass()] {
 			continue
 		}
 		if c.Type != recipe.ComponentTypeHelm {
@@ -604,10 +623,26 @@ func managedComponents(rsp *fnv1.RunFunctionResponse, res *recipe.RecipeResult, 
 	}
 	for _, name := range slices.Sorted(maps.Keys(in.ComponentOverrides)) {
 		if _, ok := managed[name]; !ok {
-			response.Warning(rsp, errors.Errorf("componentOverrides[%q] names no managed component of the resolved recipe (skipped, disabled by the recipe, or misspelled); the override is ignored", name))
+			response.Warning(rsp, errors.Errorf("componentOverrides[%q] names no managed component of the resolved recipe (skipped, left out by componentClasses, disabled by the recipe, or misspelled); the override is ignored", name))
 		}
 	}
 	return managed
+}
+
+// validateClasses rejects a componentClasses entry that is not one of AICR's
+// component classes. A misspelled class would otherwise filter out every
+// component and report a recipe that deploys nothing as a success.
+func validateClasses(in *v1beta1.Input) error {
+	for _, c := range in.ComponentClasses {
+		if _, ok := recipe.ComponentClass(c).Rank(); !ok {
+			known := make([]string, 0, len(recipe.ComponentClasses))
+			for _, k := range recipe.ComponentClasses {
+				known = append(known, string(k))
+			}
+			return errors.Errorf("componentClasses names %q, which is not an AICR component class (%s)", c, strings.Join(known, ", "))
+		}
+	}
+	return nil
 }
 
 func validateTarget(in *v1beta1.Input) error {

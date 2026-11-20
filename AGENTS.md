@@ -148,6 +148,7 @@ type Input struct {
     Configuration         *Configuration               // gke.tcpxoInterfaces, runtimeInventory.mode
     ProviderConfigRef     *ProviderConfigRef           // kind (enum, default ClusterProviderConfig) + name
     SkipDeploymentOrder   bool                         // emit everything at once, no gate
+    ComponentClasses      []string                     // core and/or ops; unset = every class
     SkipComponents        []ComponentRef               // {name} entries removed from the recipe
     ComponentOverrides    map[string]ComponentOverride // version, namespace, values (RawExtension)
     Target                *Target                      // fieldPath (^status(\..+)?$) for the summary
@@ -182,6 +183,7 @@ At least one criteria dimension must be set; every unset dimension is passed to 
 
 - `ComponentRefs` **includes components the recipe disables** (`IsEnabled() == false`); only `DeploymentOrder` omits them. Filter on `IsEnabled()`, as AICR's own deployers do.
 - `skipComponents` removes more; a name matching nothing raises a Warning result.
+- `componentClasses` keeps only the components whose class in AICR's registry (`registry.Get(name).GetClass()`, `core` or `ops`) it names; `validateClasses` makes any other name Fatal, since a misspelled class would deploy nothing and report success.
 - Only `recipe.ComponentTypeHelm` refs are managed; other types are reported as Normal results and skipped.
 - A dependency that is not managed (skipped, disabled, absent) counts as satisfied for gating.
 

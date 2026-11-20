@@ -60,6 +60,14 @@ type Input struct {
 	// +optional
 	SkipDeploymentOrder bool `json:"skipDeploymentOrder,omitempty"`
 
+	// ComponentClasses limits the recipe to the components of the named AICR
+	// classes: core is what a plain GPU pod needs to run, ops is everything
+	// else. Unset, every class is deployed. A component of another class that
+	// a deployed one depends on counts as satisfied for ordering.
+	// +listType=set
+	// +optional
+	ComponentClasses []string `json:"componentClasses,omitempty"`
+
 	// SkipComponents are excluded from the resolved recipe.
 	// +optional
 	SkipComponents []ComponentRef `json:"skipComponents,omitempty"`

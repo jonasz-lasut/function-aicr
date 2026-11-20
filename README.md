@@ -251,6 +251,13 @@ composed, exactly as AICR's own deployers treat it. `skipComponents` removes
 further components; a skipped or disabled component that another depends on
 counts as satisfied for gating — the user opted to manage it elsewhere.
 
+`componentClasses` keeps only the components of the classes it names. AICR's
+registry puts every component in one of two: `core` is what a plain GPU pod
+needs to run, and `ops` is everything else, workload platforms included. One
+composite resource can then own the GPU core and another the ops layer. The
+gate sees only its own composite resource, so an `ops` component that depends
+on a `core` one deployed elsewhere doesn't wait for it.
+
 A chart-backed component becomes a `helm.m.crossplane.io/v1beta1` `Release`
 named after the component (`cert-manager`, `gpu-operator`), so the Helm
 release in the target cluster carries that name too; `componentOverrides`
@@ -366,8 +373,9 @@ The function's input is a KRM-like object of `kind: Input`,
 | `providerConfigRef.kind` | string, optional | `ClusterProviderConfig` | Enum: `ClusterProviderConfig`, `ProviderConfig`. A kind set by the overlay is held to the same two values. |
 | `providerConfigRef.name` | string, **required** | — | From the `Input` or its overlay, so one Composition can target the cluster each composite resource names. |
 | `skipDeploymentOrder` | bool, optional | `false` | When `true`, every component is emitted at once rather than withheld until its dependencies report `Ready`. |
+| `componentClasses` | `[]string`, optional | `[]` (every class) | Limits the recipe to the components of the named AICR classes, `core` or `ops`. Any other name is Fatal. |
 | `skipComponents` | `[]ComponentRef`, optional | `[]` | Components excluded from the resolved recipe. Each entry is `{name: string}` (`name` required). An entry naming no component of the resolved recipe raises a Warning result — a typo would otherwise silently deploy the component. |
-| `componentOverrides` | `map[string]ComponentOverride`, optional | `{}` | Keyed by component name. An entry for anything not managed — misspelled, skipped, or disabled by the recipe — is ignored with a Warning result. |
+| `componentOverrides` | `map[string]ComponentOverride`, optional | `{}` | Keyed by component name. An entry for anything not managed — misspelled, skipped, left out by `componentClasses`, or disabled by the recipe — is ignored with a Warning result. |
 | `componentOverrides[name].version` | string, optional | `""` (recipe's version) | Overrides the component's chart version. |
 | `componentOverrides[name].namespace` | string, optional | `""` (recipe's namespace) | Overrides the component's target namespace. |
 | `componentOverrides[name].values` | object, optional | unset | Deep-merged over the values the recipe resolved; override wins on conflict. Must be an object — any other JSON kind is Fatal on the first reconcile, before any provider schema is requested. |
