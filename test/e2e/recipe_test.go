@@ -147,6 +147,8 @@ func TestOverlay(t *testing.T) {
 				funcs.ResourceDeletedWithin(2*time.Minute, object("e2e-notes-post-configmap-e2e-notes")),
 				funcs.ResourceDeletedWithin(1*time.Minute, configMap(componentSecond, "e2e-notes")),
 			)).
+			Assess("XRIsReadyAgain",
+				funcs.ResourcesHaveConditionWithin(3*time.Minute, recipeManifests, changed, xpv2.Available(), xpv2.ReconcileSuccess())).
 			WithTeardown("DeleteXR", deleteXR(changed)).
 			WithTeardown("DeletePrerequisites", deletePrerequisites()).
 			Feature(),

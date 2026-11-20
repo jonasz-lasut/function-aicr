@@ -17,6 +17,12 @@ spec:
         spec:
           containers:
           - name: package-runtime
+            # provider-helm marks a Release unready when it starts an upgrade
+            # and looks at it again at its next poll, ten minutes later by
+            # default. The suite would spend that time waiting after every
+            # change to a deployed release.
+            args:
+            - --poll=30s
             env:
             - name: SSL_CERT_DIR
               value: /etc/ssl/certs:/etc/function-aicr/registry-ca

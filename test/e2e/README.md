@@ -60,7 +60,7 @@ submodule (pinned `kind`, `kubectl`, `helm` and `crossplane` under
 |---|---|
 | kind and Crossplane | `controlplane.up`, at `CROSSPLANE_VERSION` and with `CROSSPLANE_ARGS` |
 | An OCI registry at `registry.e2e.svc:5443` | `manifests/setup/registry.yaml`, behind TLS from a CA `make e2e.certs` creates under `_output/e2e/certs` |
-| provider-helm, provider-kubernetes, `function-auto-ready` | `manifests/setup/packages.yaml`, at the versions the Makefile pins |
+| provider-helm, provider-kubernetes, `function-auto-ready` | `manifests/setup/packages.yaml`, at the versions the Makefile pins. provider-helm polls every 30 seconds. |
 | A `ClusterProviderConfig` named `e2e` for each provider | `manifests/setup/provider-configs.yaml`. Each provider uses its own service account, bound to `cluster-admin`, which makes the kind cluster the target cluster. |
 | The charts and the recipe catalog | `make e2e.catalog`. It pushes `catalog/charts` with `helm push` and `catalog/recipe` with `oras`, as [the recipe source page][recipe-source] tells an operator to. |
 | function-aicr | `make e2e.function`. It builds the image from the Dockerfile and a package from the image, and installs the package from Crossplane's cache with `packagePullPolicy: Never`. |

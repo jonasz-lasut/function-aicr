@@ -51,12 +51,11 @@ func TestBundleChecks(t *testing.T) {
 				// The selector leaves the Release, so the function composed
 				// the request that it refused when nothing was deployed.
 				funcs.ResourceHasFieldValueWithin(2*time.Minute, release(checked), "spec.forProvider.values.nodeSelector", funcs.NotFound),
-				// Not refused: the composite resource is synced. Its readiness
-				// is not asserted, because provider-helm reports an upgraded
-				// Release ready again only at its next poll.
-				funcs.ResourcesHaveConditionWithin(1*time.Minute, recipeManifests, xr, xpv2.ReconcileSuccess()),
 				funcs.ResourceHasFieldValueWithin(2*time.Minute, deployment(checked, checked), "spec.template.spec.nodeSelector", funcs.NotFound),
 				funcs.DeploymentBecomesAvailableWithin(2*time.Minute, checked, checked),
+				// provider-helm reports the upgraded Release ready again at
+				// its next poll, which the suite's cluster sets to 30 seconds.
+				funcs.ResourcesHaveConditionWithin(3*time.Minute, recipeManifests, xr, xpv2.Available(), xpv2.ReconcileSuccess()),
 			)).
 			WithTeardown("DeleteXR", deleteXR(xr)).
 			WithTeardown("UnlabelNodes", UnlabelNodes(acceleratedLabel)).

@@ -13,6 +13,14 @@ while it installs or upgrades a release. Afterward it reports the `Release`
 `Ready` for as long as the Helm release is deployed and matches the
 `Release`'s specification, even when its pods have stopped.
 
+An upgrade interrupts the signal for longer than it runs. provider-helm
+marks a `Release` unready when it starts to upgrade it, and looks at it
+again at its next poll, which comes every 10 minutes by default. A component
+whose values or version changed reports unready until then, and the
+composite resource with it, although Helm finished the upgrade long before.
+Nothing is withheld in the meantime, because the gate leaves what's already
+deployed alone. provider-helm's `--poll` flag shortens the wait.
+
 ## The rules
 
 For each component:

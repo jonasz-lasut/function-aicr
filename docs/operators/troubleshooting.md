@@ -139,6 +139,12 @@ reason `WatchCircuitOpen`. Crossplane's
 [circuit breaker](rollout-order.md#crossplanes-circuit-breaker) is open, and
 the rollout continues at its pace.
 
+### The composite resource is unready for minutes after a change
+
+A component whose values or version changed was upgraded, and provider-helm
+reports its `Release` ready again only at its next poll. See
+[Rollout order](rollout-order.md). The workload is running by then.
+
 ### `delaying X until dependency Y is ready` never goes away
 
 Y isn't reaching `Ready` in the target cluster. Look at its `Release` or
