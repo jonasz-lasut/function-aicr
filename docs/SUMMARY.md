@@ -22,6 +22,7 @@
 - [Opt in to a mixin](operators/mixins.md)
 - [Schema validation](operators/schema-validation.md)
 - [Rollout order](operators/rollout-order.md)
+- [Node scheduling](operators/node-scheduling.md)
 - [DRA eviction](operators/dra-eviction.md)
 - [Upgrades](operators/upgrades.md)
 - [Troubleshooting](operators/troubleshooting.md)

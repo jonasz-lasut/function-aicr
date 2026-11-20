@@ -51,6 +51,8 @@ Crossplane RunFunctionRequest
 │  5. managedComponents: enabled, not skipped, Helm-typed refs         │
 │     (Warnings for skip/override names that match nothing)            │
 │  6. resolveValues: effective values per component                    │
+│     stack.applyNodeScheduling (nodeScheduling): selectors and        │
+│     tolerations at the registry's paths; requireNodeSelectors        │
 │     stack.wireDRAEviction (draEviction): the three-chart contract    │
 │     stack.keepNamespaces: a deployed Release keeps its namespace     │
 │  7. stack.renderObjects: per component, per wave (pre/post):         │
@@ -86,11 +88,13 @@ internal/resolve/                 static Input + observed XR → the resolved In
     ├── input.go                  Input(): static Input + overlay, strict decoding
     ├── criteria.go               Criteria(): ≥1 dimension
     ├── selection.go              Profile(): one name=value; BuildOptions(): configuration
+    ├── scheduling.go             NodeScheduling(): AICR validates labels and tolerations
     └── providerconfig.go         ProviderConfigRef(): kind enum, name required
     ↓
 internal/compose/                 Builds the composed resources (map[string]any)
     ├── release.go                NewRelease, Override, effective(), SplitChart, MergeValues
     ├── manifest.go               RenderManifest via aicr/pkg/manifest.Render
+    ├── scheduling.go             ApplyNodeScheduling, RequireNodeSelectors: a copy of the bundler's pass
     ├── draeviction.go            WireDRAEviction: a copy of the bundler's eviction wiring
     └── object.go                 SplitManifests, ManifestObjectName, NewObject
     ↓
@@ -157,6 +161,7 @@ type Input struct {
     Profile               map[string]string            // one recipe variant, {gpuStack: dra}
     Configuration         *Configuration               // gke.tcpxoInterfaces, runtimeInventory.mode
     ProviderConfigRef     *ProviderConfigRef           // kind (enum, default ClusterProviderConfig) + name
+    NodeScheduling        *NodeScheduling              // system / accelerated: nodeSelector, tolerations
     DRAEviction           bool                         // wire AICR's DRA eviction contract
     SkipDeploymentOrder   bool                         // emit everything at once, no gate
     ComponentClasses      []string                     // core and/or ops; unset = every class
@@ -180,7 +185,7 @@ Every field of the `Input` is static, the value all composite resources get, unl
 
 1. maps merge key by key, the overlay wins, static keys it does not set are kept
 2. a list replaces the static list whole
-3. a null or `""` counts as unset and keeps the static value (Kubernetes cannot tell `""` from omitted); under `componentOverrides.<component>.values` an empty string is a chart value like any other
+3. a null or `""` counts as unset and keeps the static value (Kubernetes cannot tell `""` from omitted); under `componentOverrides.<component>.values` an empty string is a chart value like any other, and in a `nodeScheduling` node selector it is a label's value
 4. a path absent from the XR → the static Input alone
 5. a path holding anything but an object, an overlay that sets `overlayFrom` (or `apiVersion`, `kind`, `metadata`), a field the Input does not have → error (Fatal), never a silent fallback
 
@@ -210,6 +215,14 @@ Composed resources are `map[string]any` (see Design Decisions), built in `intern
 - **Namespace Object** - `stack.namespaceObject` adds `compose.NewNamespaceObject` to the `pre` wave of a component that renders pre-manifest documents, and of a manifest-only component that renders any, named as a Namespace document of the component's own would be (`<component>-pre-namespace-<namespace>`). AICR's bundler installs manifest files as a chart of their own with `--create-namespace`; without the equivalent a pre-manifest Object fails with `namespaces "..." not found` and its Release, which waits for it, is never emitted (the end-to-end suite found this). `managementPolicies: [Observe, Create]` makes the provider create a missing namespace and never update or delete one. A component whose manifest files declare the namespace (the Talos `talos-namespace.yaml` files) keeps its own Object.
 
 Names are pure functions of their inputs because the gate correlates observed against desired resources by name. This also means one composite per target namespace: two would claim the same names.
+
+### Node scheduling
+
+`nodeScheduling.system` and `nodeScheduling.accelerated` each hold a `nodeSelector` and `tolerations` (`corev1.Toleration`). `resolve.NodeScheduling` validates them with AICR's own `config.ValidateNodeSelector` / `config.ValidateTolerations`, and `stack.applyNodeScheduling` writes them into every managed component's values at the paths its registry entry lists (`ComponentConfig.GetSystemNodeSelectorPaths` and its three siblings). It runs right after `resolveValues`, before any override is merged, because the bundler applies its structured overrides (`--set-json`) after scheduling: a `componentOverrides` value wins.
+
+`compose.ApplyNodeScheduling` is a copy of the orchestration AICR's bundler keeps unexported (`applyNodeSchedulingOverrides`, `classifySchedulingPaths` and `applyTolerationPaths` in `aicr.run/pkg/bundler/bundler.go`), built on the helpers `aicr.run/pkg/component` exports. The policy comes from the recipe's inline overrides only (`ComponentRef.Overrides`), never from the values file: an empty value at a path opts it out, a non-empty one makes tolerations append, everything else is replaced, and a toleration path listed for both tiers gets `component.SharedTolerations`. Two deliberate differences from the CLI: nothing is defaulted (the CLI tolerates every taint when its flags are unset, which here would reschedule every running stack on a function upgrade), and the bundler's other inputs to the same pass (workload selector, workload gate, node count, storage class) are not implemented.
+
+`stack.requireNodeSelectors` then runs `compose.RequireNodeSelectors` on the values with the override merged: a registry entry with `requireNodeSelector` and no selector at a non-opted-out path is Fatal, as `validateRequiredNodeSelectors` fails a bundle. In aicr v1.3.0 that is `slinky-slurm`, `slurm-accounting-mariadb` and `nvsentinel-mongodb`, and 6 of the 81 leaves (the Slurm recipes for AKS, EKS and GKE) fail without a selector. `TestNodeSchedulingAcrossTheCatalog` applies both tiers to every leaf, requires the check to pass and the manifests to render, and fails if a registry entry starts to use `requireNodeSelectorIfStorageClassSet`, the conditional variant that is not ported.
 
 ### DRA eviction
 
@@ -388,8 +401,9 @@ The `aicr.run` version is the recipe catalog version (AICR renamed its Go module
 2. `go test ./...` — `TestRunFunction` fails wherever recipe content changed; `TestCatalogInvariants` fails, naming the leaf and component, wherever a recipe's *shape* broke an assumption (a manifest that no longer renders, a name collision, a dependency edge into a component the gate cannot see)
 3. `go generate ./...` and **review the diff under `test-fixtures/want/`** — it is exactly what the function will now deploy. Commit it with the bump.
 4. Re-render the examples (`example/clusterstack/README.md`) for both XRs
-5. Re-read the bundler's DRA eviction wiring: `injectDRAEvictionLabel` and its two helpers in `aicr.run/pkg/bundler/bundler.go`, plus `draNodeLabelerDropReason` for when the labeler applies. `compose.WireDRAEviction` is a hand copy of that logic. `TestDRAEvictionConstants` catches a renamed constant or a moved value path; a change in behaviour (a new component in the contract, a new condition, a different merge rule) only shows in the source, so diff those functions against the previous AICR version and port what changed
-6. Fix behaviour changes by hand: the static parts of each response are asserted in code, not regenerated. A component the catalog adds joins every `TestRunFunction` fixture that does not list it under `skipComponents`; add it there to keep the pinned tier small
+5. Re-read the bundler's node scheduling pass: `applyNodeSchedulingOverrides`, `classifySchedulingPaths`, `applyTolerationPaths` and `validateRequiredNodeSelectors` in `aicr.run/pkg/bundler/bundler.go`, of which `compose.ApplyNodeScheduling` and `compose.RequireNodeSelectors` are hand copies. `TestNodeSchedulingAcrossTheCatalog` catches a registry entry that needs the unported storage class condition; a changed rule only shows in the source
+6. Re-read the bundler's DRA eviction wiring: `injectDRAEvictionLabel` and its two helpers in `aicr.run/pkg/bundler/bundler.go`, plus `draNodeLabelerDropReason` for when the labeler applies. `compose.WireDRAEviction` is a hand copy of that logic. `TestDRAEvictionConstants` catches a renamed constant or a moved value path; a change in behaviour (a new component in the contract, a new condition, a different merge rule) only shows in the source, so diff those functions against the previous AICR version and port what changed
+7. Fix behaviour changes by hand: the static parts of each response are asserted in code, not regenerated. A component the catalog adds joins every `TestRunFunction` fixture that does not list it under `skipComponents`; add it there to keep the pinned tier small
 
 Since aicr v0.19.0 the resolver enforces a coverage post-condition: every stated dimension must be honored by an applied overlay. Do not reintroduce client-side defaults (e.g. `os: ubuntu`) or cross-field rules — leave unresolved dimensions unstated and let AICR answer.
 

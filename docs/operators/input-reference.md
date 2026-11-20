@@ -46,6 +46,10 @@ Every field is static unless the overlay sets it. See
 | `componentOverrides.<name>.version` | string | the recipe's | The chart version. |
 | `componentOverrides.<name>.namespace` | string | the recipe's, or the one the component is already deployed in | The target namespace. Also how a deployed component is moved to the namespace a newer recipe names. |
 | `componentOverrides.<name>.values` | object | unset | Deep-merged over the values the recipe resolved. On a conflict the override's value is used. Anything but an object is Fatal on the first pass. |
+| `nodeScheduling.system.nodeSelector` | map of string to string | unset | Node labels for system workloads, written to the chart values AICR's registry lists. See [Node scheduling](node-scheduling.md). |
+| `nodeScheduling.system.tolerations` | list of tolerations | unset | Tolerations for system workloads, in the pod specification's own format. |
+| `nodeScheduling.accelerated.nodeSelector` | map of string to string | unset | Node labels for workloads on accelerated nodes. |
+| `nodeScheduling.accelerated.tolerations` | list of tolerations | unset | Tolerations for workloads on accelerated nodes. |
 | `draEviction` | bool | `false` | Wires AICR's eviction contract across three components. See [DRA eviction](dra-eviction.md). |
 
 See [Components and overrides](../authors/components.md).

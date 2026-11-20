@@ -63,6 +63,17 @@ A composed resource failed the provider's CRD schema. With an override, check
 its values. Without one, the installed provider is likely older than the
 fields the function sets.
 
+### `component "…" requires nodeScheduling.system.nodeSelector`
+
+AICR's registry requires a node selector for the component, and its values
+have none. Set the selector the message names. See
+[Node scheduling](node-scheduling.md#components-that-require-a-node-selector).
+
+### `cannot resolve the node scheduling`
+
+A node selector under `nodeScheduling` isn't made of valid labels, or a
+toleration is one the API server would refuse. The message quotes it.
+
 ### `this recipe ships torch-distributed-tcpxo and requires configuration.gke.tcpxoInterfaces`
 
 The `h100` / `gke` / `cos` / `training` / `kubeflow` recipe needs the

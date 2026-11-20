@@ -48,6 +48,10 @@ what replaced it.
 
 A field the `Input` doesn't have is now Fatal. It used to be ignored.
 
+A component whose registry entry requires a node selector is now refused
+without one, which affects the Slurm recipes for AKS, EKS and GKE. Set
+[`nodeScheduling`](node-scheduling.md).
+
 In the [status summary](../authors/summary.md), `componentCount` is now the
 number of components the recipe deploys. It used to equal the length of
 `deployedComponents`.

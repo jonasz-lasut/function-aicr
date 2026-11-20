@@ -94,7 +94,8 @@ func decode(m map[string]any) (*v1beta1.Input, error) {
 // value, because the Kubernetes API cannot tell an empty optional string from
 // an omitted one. Chart values are the exception: under
 // componentOverrides.<component>.values an empty string or a null is a value
-// like any other.
+// like any other. So is an empty string in a node selector, where it is the
+// value of many node labels.
 func merge(base, overlay map[string]any, path []string) map[string]any {
 	out := maps.Clone(base)
 	if out == nil {
@@ -115,8 +116,27 @@ func merge(base, overlay map[string]any, path []string) map[string]any {
 				out[k] = compose.MergeValues(bv, ov)
 				continue
 			}
+			if len(path) == 2 && path[0] == "nodeScheduling" && k == "nodeSelector" {
+				out[k] = mergeLabels(bv, ov)
+				continue
+			}
 			out[k] = merge(bv, ov, append(path, k))
 		default:
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// mergeLabels merges the overlay's labels over the base's. Only a null counts
+// as unset: a label's value may be the empty string.
+func mergeLabels(base, overlay map[string]any) map[string]any {
+	out := maps.Clone(base)
+	if out == nil {
+		out = make(map[string]any, len(overlay))
+	}
+	for k, v := range overlay {
+		if v != nil {
 			out[k] = v
 		}
 	}

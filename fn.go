@@ -143,6 +143,11 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 		response.Fatal(rsp, errors.Wrap(err, "cannot resolve the recipe profile"))
 		return rsp, nil
 	}
+	scheduling, err := resolve.NodeScheduling(in)
+	if err != nil {
+		response.Fatal(rsp, errors.Wrap(err, "cannot resolve the node scheduling"))
+		return rsp, nil
+	}
 
 	res, err := recipe.NewBuilder(recipe.WithVersion(f.recipeVersion), recipe.WithDataProvider(f.dp)).
 		BuildFromCriteriaWithProfile(ctx, criteria, profile, resolve.BuildOptions(in)...)
@@ -178,6 +183,11 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 	}
 	if s.observed, err = request.GetObservedComposedResources(req); err != nil {
 		response.Fatal(rsp, errors.Wrapf(err, "cannot get observed composed resources from %T", req))
+		return rsp, nil
+	}
+	optedOut := s.applyNodeScheduling(scheduling, registry)
+	if err := s.requireNodeSelectors(registry, optedOut); err != nil {
+		response.Fatal(rsp, err)
 		return rsp, nil
 	}
 	if in.DRAEviction {
@@ -280,6 +290,39 @@ type stack struct {
 	// waiting names, per component the gate withheld, what it waits for: a
 	// dependency, or one of its own pre-manifest Objects.
 	waiting map[string]string
+}
+
+// applyNodeScheduling writes the node selectors and tolerations of the Input
+// into the values of every managed component, at the paths AICR's registry
+// names for it, and returns per component the selector paths the recipe opts
+// out. Like the bundler, it writes before the overrides are merged, so a
+// componentOverrides value wins over what is written here.
+func (s *stack) applyNodeScheduling(scheduling compose.NodeScheduling, registry *recipe.ComponentRegistry) map[string]map[string]bool {
+	optedOut := make(map[string]map[string]bool, len(s.managed))
+	for name, c := range s.managed {
+		if s.values[name] == nil {
+			s.values[name] = make(map[string]any)
+		}
+		optedOut[name] = compose.ApplyNodeScheduling(s.values[name], registry.Get(name), c, scheduling)
+	}
+	return optedOut
+}
+
+// requireNodeSelectors fails when a managed component whose registry entry
+// requires a node selector deploys without one. It reads the values the
+// component deploys with, its override merged in, as the bundler checks after
+// every override: an override can supply the selector, or clear it.
+func (s *stack) requireNodeSelectors(registry *recipe.ComponentRegistry, optedOut map[string]map[string]bool) error {
+	for _, name := range slices.Sorted(maps.Keys(s.managed)) {
+		values := s.values[name]
+		if o := s.overrides[name]; o != nil && o.Values != nil {
+			values = compose.MergeValues(values, o.Values)
+		}
+		if err := compose.RequireNodeSelectors(name, values, registry.Get(name), optedOut[name]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // wireDRAEviction wires AICR's DRA eviction contract into the values of the

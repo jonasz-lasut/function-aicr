@@ -46,6 +46,35 @@ spec:
                     type: object
                     additionalProperties:
                       type: string
+                  nodeScheduling:
+                    type: object
+                    properties:
+                      system:
+                        type: object
+                        properties:
+                          nodeSelector:
+                            type: object
+                            additionalProperties:
+                              type: string
+                          tolerations:
+                            type: array
+                            items:
+                              type: object
+                              x-kubernetes-preserve-unknown-fields: true
+                            x-kubernetes-list-type: atomic
+                      accelerated:
+                        type: object
+                        properties:
+                          nodeSelector:
+                            type: object
+                            additionalProperties:
+                              type: string
+                          tolerations:
+                            type: array
+                            items:
+                              type: object
+                              x-kubernetes-preserve-unknown-fields: true
+                            x-kubernetes-list-type: atomic
                   configuration:
                     type: object
                     properties:

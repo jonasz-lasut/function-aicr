@@ -17,6 +17,7 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	sigsyaml "sigs.k8s.io/yaml"
 
@@ -348,6 +349,26 @@ func TestRunFunction(t *testing.T) {
 					Conditions:   []*fnv1.Condition{functionSuccess()},
 				},
 				golden: golden{resources: "profile"},
+			},
+		},
+		"SchedulesOnNodePools": {
+			reason: "nodeScheduling is written to the values AICR's registry names per component: cert-manager's workloads get the system placement, gpu-operator's operator the system one and its daemonsets the accelerated toleration next to the recipe's own, and nfd's worker, which runs on every node, both.",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:            meta(),
+					Input:           yamlToProto("input/node-scheduling.yaml"),
+					Observed:        &fnv1.State{Composite: fixture("observed/xr.yaml")},
+					RequiredSchemas: map[string]*fnv1.Schema{"release": permissiveSchema()},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta:         respMeta,
+					Requirements: releaseRequirement(),
+					Conditions:   []*fnv1.Condition{functionSuccess()},
+				},
+				golden: golden{resources: "node-scheduling"},
 			},
 		},
 		"EnablesRuntimeInventory": {
@@ -1004,6 +1025,64 @@ func TestCatalogInvariants(t *testing.T) {
 // AICR's bundler keeps private, so an AICR bump can move them without a
 // compile error: here a leaf whose values no longer take the wiring, or whose
 // dra-node-labeler still renders nothing once enabled, fails by name.
+// TestNodeSchedulingAcrossTheCatalog guards what compose.ApplyNodeScheduling
+// and compose.RequireNodeSelectors assume of the catalog, on every leaf.
+func TestNodeSchedulingAcrossTheCatalog(t *testing.T) {
+	ctx := context.Background()
+	dp := embeddedDataProvider()
+	registry, err := recipe.GetComponentRegistryFor(dp)
+	if err != nil {
+		t.Fatalf("recipe.GetComponentRegistryFor(...): %v", err)
+	}
+	leaves, err := recipe.ResolveLeaves(ctx, recipe.ResolveLeavesOptions{Provider: dp, Version: testRecipeVersion})
+	if err != nil {
+		t.Fatalf("recipe.ResolveLeaves(...): %v", err)
+	}
+
+	placed := compose.NodeScheduling{
+		System: compose.NodePlacement{
+			NodeSelector: map[string]string{"nodeGroup": "system-pool"},
+			Tolerations:  []corev1.Toleration{{Key: "dedicated", Operator: corev1.TolerationOpEqual, Value: "system", Effect: corev1.TaintEffectNoSchedule}},
+		},
+		Accelerated: compose.NodePlacement{
+			NodeSelector: map[string]string{"nodeGroup": "gpu-pool"},
+			Tolerations:  []corev1.Toleration{{Key: "nvidia.com/gpu", Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoSchedule}},
+		},
+	}
+
+	for _, leaf := range leaves {
+		if leaf.Err != nil {
+			continue // TestCatalogInvariants reports it.
+		}
+		t.Run(leaf.Entry.Name, func(t *testing.T) {
+			t.Parallel()
+			managed := managedComponents(&fnv1.RunFunctionResponse{}, leaf.Result, &v1beta1.Input{}, registry)
+			values, err := resolveValues(ctx, leaf.Result, managed)
+			if err != nil {
+				t.Fatalf("resolveValues(...): %v", err)
+			}
+			for name := range managed {
+				comp := registry.Get(name)
+				if comp == nil {
+					continue
+				}
+				if comp.RequireSystemNodeSelectorIfStorageClassSet() || comp.RequireAcceleratedNodeSelectorIfStorageClassSet() {
+					t.Errorf("%q requires a node selector once a storage class is set, a condition compose.RequireNodeSelectors does not have: port componentHasConfiguredStorageClass from aicr.run/pkg/bundler/bundler.go", name)
+				}
+			}
+
+			s := &stack{managed: managed, values: values, dp: dp}
+			optedOut := s.applyNodeScheduling(placed, registry)
+			if err := s.requireNodeSelectors(registry, optedOut); err != nil {
+				t.Errorf("requireNodeSelectors(...) with both node selectors set: %v", err)
+			}
+			if err := s.renderObjects(ctx); err != nil {
+				t.Errorf("renderObjects(...) with node scheduling applied: %v", err)
+			}
+		})
+	}
+}
+
 func TestDRAEvictionAcrossTheCatalog(t *testing.T) {
 	ctx := context.Background()
 	dp := embeddedDataProvider()

@@ -43,7 +43,8 @@ named `workload-a`.
    static value. Kubernetes API conventions make `""` and an omitted optional
    field indistinguishable. Chart values are the exception: under
    `componentOverrides.<component>.values` an empty string or a null is a
-   value like any other.
+   value like any other. An empty string in a node selector under
+   `nodeScheduling` is a value too: many node labels have that value.
 4. A field path that's absent from the composite resource leaves the static
    `Input` unchanged.
 5. A field path that holds anything but an object, an overlay that sets
