@@ -1,7 +1,6 @@
 package resolve
 
 import (
-	"github.com/crossplane/crossplane-runtime/v2/pkg/fieldpath"
 	"github.com/crossplane/function-sdk-go/errors"
 
 	"github.com/jonasz-lasut/function-aicr/input/v1beta1"
@@ -14,36 +13,20 @@ const (
 	providerConfigKindNamespaced = "ProviderConfig"
 )
 
-// ProviderConfigRef resolves the provider config every composed resource
-// references, from the function input and the observed composite resource,
-// with the same rules as Criteria: a providerConfigRefFrom field path that
-// resolves to a non-empty string wins over its providerConfigRef literal; a
-// path that is absent or empty falls back to the literal; a malformed path or
-// a non-string value is an error. The name is required. The kind defaults to
-// ClusterProviderConfig and must be a kind the providers accept — a value
-// pulled off the composite resource bypasses the Input schema's enum.
-func ProviderConfigRef(in *v1beta1.Input, oxr *fieldpath.Paved) (compose.ProviderConfigRef, error) {
-	literal := in.ProviderConfigRef
-	if literal == nil {
-		literal = &v1beta1.ProviderConfigRef{}
+// ProviderConfigRef returns the provider config every composed resource
+// references, from the resolved Input. The name is required. The kind
+// defaults to ClusterProviderConfig and must be a kind the providers accept:
+// a value the overlay read off the composite resource bypasses the Input
+// schema's enum.
+func ProviderConfigRef(in *v1beta1.Input) (compose.ProviderConfigRef, error) {
+	ref := in.ProviderConfigRef
+	if ref == nil {
+		ref = &v1beta1.ProviderConfigRef{}
 	}
-	from := in.ProviderConfigRefFrom
-	if from == nil {
-		from = &v1beta1.ProviderConfigRefFrom{}
+	if ref.Name == "" {
+		return compose.ProviderConfigRef{}, errors.New("providerConfigRef.name is required: set it in the Input, or in the overlay overlayFrom.fieldPath reads from the composite resource")
 	}
-
-	name, err := resolveString(oxr, from.Name, literal.Name)
-	if err != nil {
-		return compose.ProviderConfigRef{}, err
-	}
-	if name == "" {
-		return compose.ProviderConfigRef{}, errors.New("providerConfigRef.name is required: set it, or a providerConfigRefFrom.name field path that resolves on the composite resource")
-	}
-
-	kind, err := resolveString(oxr, from.Kind, literal.Kind)
-	if err != nil {
-		return compose.ProviderConfigRef{}, err
-	}
+	kind := ref.Kind
 	switch kind {
 	case "":
 		kind = providerConfigKindCluster
@@ -51,6 +34,5 @@ func ProviderConfigRef(in *v1beta1.Input, oxr *fieldpath.Paved) (compose.Provide
 	default:
 		return compose.ProviderConfigRef{}, errors.Errorf("providerConfigRef.kind must be %s or %s, got %q", providerConfigKindCluster, providerConfigKindNamespaced, kind)
 	}
-
-	return compose.ProviderConfigRef{Kind: kind, Name: name}, nil
+	return compose.ProviderConfigRef{Kind: kind, Name: ref.Name}, nil
 }

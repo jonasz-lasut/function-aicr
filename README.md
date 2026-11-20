@@ -26,9 +26,9 @@ orders before it reports `Ready`.
 ## Usage
 
 Use `function-aicr` as a step in a Crossplane Composition pipeline. The
-function takes an `Input` naming the recipe criteria — literally, or as field
-paths into the composite resource — and the provider config of the target
-cluster:
+function takes an `Input` naming the recipe criteria and the provider config
+of the target cluster. A value is either static in the Composition or set by
+the composite resource, through the object `overlayFrom` names:
 
 ```yaml
 apiVersion: apiextensions.crossplane.io/v1
@@ -47,12 +47,8 @@ spec:
     input:
       apiVersion: aicr.fn.crossplane.io/v1beta1
       kind: Input
-      criteriaFrom:
-        accelerator: spec.accelerator
-        service: spec.service
-        intent: spec.intent
-        os: spec.os
-        platform: spec.platform
+      overlayFrom:
+        fieldPath: spec.aicr
       providerConfigRef:
         kind: ClusterProviderConfig
         name: gpu-cluster
@@ -72,14 +68,17 @@ metadata:
   name: gpu-training-stack
   namespace: default
 spec:
-  accelerator: h100
-  service: kind
-  intent: training
+  aicr:
+    criteria:
+      accelerator: h100
+      service: kind
+      intent: training
 ```
 
-The XRD author exposes whatever field names they like; `criteriaFrom` (and
-`providerConfigRefFrom`) wire them to the function without it ever knowing
-the XR's kind. Put [function-auto-ready][auto-ready] after `function-aicr`:
+The object at `spec.aicr` is shaped like the `Input` and merged over it, so
+the XRD decides which `Input` fields a composite resource controls and the
+function never needs to know the XR's kind. Put
+[function-auto-ready][auto-ready] after `function-aicr`:
 the function gates on the observed readiness of the resources it composes and
 leaves the XR's own readiness to the pipeline.
 
@@ -173,29 +172,34 @@ it as a Crossplane composition instead adds what the platform brings:
 
 ## How it works
 
-### Criteria resolution
+### Input resolution
 
-For each of `accelerator`, `service`, `intent`, `os` and `platform` the
-function resolves a final value from the input:
+Every field of the `Input` is static: the value all composite resources get.
+`overlayFrom.fieldPath` names an object on the observed composite resource,
+shaped like the `Input`, that is merged over it:
 
-1. If `criteriaFrom.<field>` is unset, the literal `criteria.<field>` is used
-   (which may itself be empty).
-2. If `criteriaFrom.<field>` is set and the field path resolves to a
-   non-empty string on the observed composite resource, that value wins.
-3. If the field path is absent or an empty string, the function falls back
-   to the literal — Kubernetes API conventions make `""` and an omitted
-   optional field indistinguishable.
-4. If the field path is malformed, or resolves to a value that is not a
-   string, the function is Fatal — never a silent fallback.
+1. Maps merge key by key and the overlay wins; a static key the overlay
+   doesn't set is kept.
+2. A list in the overlay replaces the static list whole.
+3. An empty string or a null in the overlay counts as unset and keeps the
+   static value: Kubernetes API conventions make `""` and an omitted optional
+   field indistinguishable. Chart values are the exception. Under
+   `componentOverrides.<component>.values` an empty string is a value like
+   any other.
+4. A field path that is absent from the composite resource leaves the static
+   `Input` as it is.
+5. A field path that holds anything but an object, an overlay that sets
+   `overlayFrom`, and a field the `Input` doesn't have are Fatal, never a
+   silent fallback. The static `Input` is decoded as strictly.
 
-`providerConfigRefFrom.{kind,name}` follow the same rules against
-`providerConfigRef.{kind,name}`, so the target cluster can come from the XR
-as well.
+The overlay may set any field but `overlayFrom`. What limits it is the XRD:
+Crossplane prunes the fields an XRD doesn't declare, so declare under the
+overlay path exactly the `Input` fields a composite resource should control.
 
-No single dimension is required, but at least one must resolve — an input
-whose `criteriaFrom` paths all miss the composite is Fatal rather than a
-silent deployment of the base recipe. Every unresolved dimension is passed to
-AICR unstated, so resolution selects the agnostic tier for it; AICR's catalog
+No single criteria dimension is required, but at least one must be set: an
+`Input` with no criteria, as when its overlay misses the composite resource,
+is Fatal rather than a silent deployment of the base recipe. Every unset
+dimension is passed to AICR unstated, so resolution selects the agnostic tier for it; AICR's catalog
 alone decides which combinations exist and rejects a stated value no recipe
 honors.
 
@@ -311,24 +315,17 @@ The function's input is a KRM-like object of `kind: Input`,
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `criteria` | object (`Criteria`), optional | — | Literal AICR recipe criteria. Any field may be overridden per composite resource via `criteriaFrom`. |
+| `overlayFrom` | object (`OverlayFrom`), optional | unset | Where an overlay of this `Input` is read from. Every other field is static unless the overlay sets it; see [Input resolution](#input-resolution). |
+| `overlayFrom.fieldPath` | string, **required if `overlayFrom` set** | — | A field path on the observed composite resource, e.g. `spec.aicr`, naming an object shaped like this `Input`. |
+| `criteria` | object (`Criteria`), optional | — | AICR recipe criteria. At least one dimension must be set, here or by the overlay. |
 | `criteria.accelerator` | string, optional | `""` | e.g. `h100`, `b200`, `a100`. Validated against AICR's accelerator enum. |
 | `criteria.service` | string, optional | `""` | e.g. `eks`, `gke`, `aks`, `kind`. Validated against AICR's service enum. |
 | `criteria.intent` | string, optional | `""` | `training` or `inference`. |
-| `criteria.os` | string, optional | `""` (unstated) | e.g. `ubuntu`, `cos`, `talos`. Left unstated when neither `criteria.os` nor a resolving `criteriaFrom.os` supplies a value, so AICR selects the OS-agnostic recipe tier. AICR rejects an OS no recipe for the service honors (e.g. `ubuntu` on `kind`), and asks for one when a service+accelerator pair has only OS-specific recipes. |
+| `criteria.os` | string, optional | `""` (unstated) | e.g. `ubuntu`, `cos`, `talos`. Left unstated when neither the `Input` nor its overlay sets it, so AICR selects the OS-agnostic recipe tier. AICR rejects an OS no recipe for the service honors (e.g. `ubuntu` on `kind`), and asks for one when a service+accelerator pair has only OS-specific recipes. |
 | `criteria.platform` | string, optional | `""` | e.g. `kubeflow`, `slurm`, `runai`, `dynamo`, `nim`. |
-| `criteriaFrom` | object (`CriteriaFrom`), optional | — | Field paths into the observed composite resource whose values take precedence over the matching `criteria` field. |
-| `criteriaFrom.accelerator` | `*string`, optional | unset | A field path, e.g. `spec.accelerator`. |
-| `criteriaFrom.service` | `*string`, optional | unset | |
-| `criteriaFrom.intent` | `*string`, optional | unset | |
-| `criteriaFrom.os` | `*string`, optional | unset | |
-| `criteriaFrom.platform` | `*string`, optional | unset | |
-| `providerConfigRef` | object (`ProviderConfigRef`), optional | — | The provider config for the target cluster, stamped onto every composed `Release` and `Object`. Either it or `providerConfigRefFrom` must supply a name. |
-| `providerConfigRef.kind` | string, optional | `ClusterProviderConfig` | Enum: `ClusterProviderConfig`, `ProviderConfig`. |
-| `providerConfigRef.name` | string, optional | — | Required unless `providerConfigRefFrom.name` resolves. |
-| `providerConfigRefFrom` | object (`ProviderConfigRefFrom`), optional | — | Field paths into the observed composite resource whose values take precedence over the matching `providerConfigRef` field — the same rules as `criteriaFrom` — so one Composition can target the cluster each composite resource names. |
-| `providerConfigRefFrom.kind` | `*string`, optional | unset | A field path, e.g. `spec.providerConfigKind`. A resolved kind must be `ClusterProviderConfig` or `ProviderConfig`. |
-| `providerConfigRefFrom.name` | `*string`, optional | unset | A field path, e.g. `spec.clusterRef.name`. |
+| `providerConfigRef` | object (`ProviderConfigRef`), optional | — | The provider config for the target cluster, stamped onto every composed `Release` and `Object`. |
+| `providerConfigRef.kind` | string, optional | `ClusterProviderConfig` | Enum: `ClusterProviderConfig`, `ProviderConfig`. A kind set by the overlay is held to the same two values. |
+| `providerConfigRef.name` | string, **required** | — | From the `Input` or its overlay, so one Composition can target the cluster each composite resource names. |
 | `skipDeploymentOrder` | bool, optional | `false` | When `true`, every component is emitted at once rather than withheld until its dependencies report `Ready`. |
 | `skipComponents` | `[]ComponentRef`, optional | `[]` | Components excluded from the resolved recipe. Each entry is `{name: string}` (`name` required). An entry naming no component of the resolved recipe raises a Warning result — a typo would otherwise silently deploy the component. |
 | `componentOverrides` | `map[string]ComponentOverride`, optional | `{}` | Keyed by component name. An entry for anything not managed — misspelled, skipped, or disabled by the recipe — is ignored with a Warning result. |

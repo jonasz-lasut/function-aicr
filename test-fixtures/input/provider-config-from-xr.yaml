@@ -1,14 +1,9 @@
 apiVersion: aicr.fn.crossplane.io/v1beta1
 kind: Input
-criteriaFrom:
-  accelerator: spec.gpuType
-  service: spec.cloud
-  intent: spec.purpose
+overlayFrom:
+  fieldPath: spec.aicr
 providerConfigRef:
   name: default-cluster
-providerConfigRefFrom:
-  kind: spec.providerConfigKind
-  name: spec.providerConfigName
 skipDeploymentOrder: true
 skipComponents:
 - name: dra-node-labeler

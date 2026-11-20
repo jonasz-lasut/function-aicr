@@ -8,6 +8,8 @@ metadata:
   name: gpu-training-stack-eks
   namespace: default
 spec:
-  accelerator: h100
-  service: eks
-  intent: training
+  aicr:
+    criteria:
+      accelerator: h100
+      service: eks
+      intent: training

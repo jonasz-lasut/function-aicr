@@ -19,20 +19,29 @@ spec:
           spec:
             type: object
             required:
-            - accelerator
-            - service
-            - intent
+            - aicr
             properties:
-              accelerator:
-                type: string
-              service:
-                type: string
-              intent:
-                type: string
-              os:
-                type: string
-              platform:
-                type: string
+              aicr:
+                description: >-
+                  Merged over the function-aicr Input by its overlayFrom. The
+                  fields declared here are the ones a ClusterStack may set.
+                type: object
+                required:
+                - criteria
+                properties:
+                  criteria:
+                    type: object
+                    properties:
+                      accelerator:
+                        type: string
+                      service:
+                        type: string
+                      intent:
+                        type: string
+                      os:
+                        type: string
+                      platform:
+                        type: string
           status:
             type: object
             properties:

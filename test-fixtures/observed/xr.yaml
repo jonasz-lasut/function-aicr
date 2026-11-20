@@ -4,6 +4,8 @@ metadata:
   name: cs-resolve
   namespace: default
 spec:
-  gpuType: h100
-  cloud: kind
-  purpose: training
+  aicr:
+    criteria:
+      accelerator: h100
+      service: kind
+      intent: training

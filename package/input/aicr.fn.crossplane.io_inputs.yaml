@@ -49,24 +49,8 @@ spec:
             type: object
           criteria:
             description: |-
-              Criteria are the literal AICR recipe criteria. Any field may be
-              overridden per composite resource via CriteriaFrom.
-            properties:
-              accelerator:
-                type: string
-              intent:
-                type: string
-              os:
-                type: string
-              platform:
-                type: string
-              service:
-                type: string
-            type: object
-          criteriaFrom:
-            description: |-
-              CriteriaFrom names field paths on the observed composite resource whose
-              values take precedence over the matching Criteria field.
+              Criteria are the AICR recipe criteria. At least one dimension must be
+              set, here or by the overlay.
             properties:
               accelerator:
                 type: string
@@ -89,29 +73,36 @@ spec:
             type: string
           metadata:
             type: object
+          overlayFrom:
+            description: |-
+              OverlayFrom names an object on the observed composite resource that is
+              merged over this Input, so one Composition can serve composite resources
+              that each name their own recipe and target cluster. Every other field
+              of this Input is static: the value every composite resource gets unless
+              its overlay sets the field.
+            properties:
+              fieldPath:
+                description: |-
+                  FieldPath names an object on the observed composite resource, shaped
+                  like this Input. Its maps are merged over the Input key by key and its
+                  lists replace the Input's; an empty string counts as unset. It may set
+                  any field but overlayFrom. A path that is absent from the composite
+                  resource leaves the Input as it is.
+                type: string
+            required:
+            - fieldPath
+            type: object
           providerConfigRef:
             description: |-
               ProviderConfigRef references the provider config holding credentials for
               the target cluster. It is stamped onto every composed Release and Object.
-              Either it or ProviderConfigRefFrom must supply a name.
+              A name is required, here or from the overlay.
             properties:
               kind:
                 default: ClusterProviderConfig
                 enum:
                 - ClusterProviderConfig
                 - ProviderConfig
-                type: string
-              name:
-                type: string
-            type: object
-          providerConfigRefFrom:
-            description: |-
-              ProviderConfigRefFrom names field paths on the observed composite
-              resource whose values take precedence over the matching ProviderConfigRef
-              field, so one Composition can target the cluster each composite resource
-              names.
-            properties:
-              kind:
                 type: string
               name:
                 type: string

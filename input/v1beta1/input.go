@@ -23,28 +23,24 @@ type Input struct {
 
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	// Criteria are the literal AICR recipe criteria. Any field may be
-	// overridden per composite resource via CriteriaFrom.
+	// OverlayFrom names an object on the observed composite resource that is
+	// merged over this Input, so one Composition can serve composite resources
+	// that each name their own recipe and target cluster. Every other field
+	// of this Input is static: the value every composite resource gets unless
+	// its overlay sets the field.
+	// +optional
+	OverlayFrom *OverlayFrom `json:"overlayFrom,omitempty"`
+
+	// Criteria are the AICR recipe criteria. At least one dimension must be
+	// set, here or by the overlay.
 	// +optional
 	Criteria *Criteria `json:"criteria,omitempty"`
 
-	// CriteriaFrom names field paths on the observed composite resource whose
-	// values take precedence over the matching Criteria field.
-	// +optional
-	CriteriaFrom *CriteriaFrom `json:"criteriaFrom,omitempty"`
-
 	// ProviderConfigRef references the provider config holding credentials for
 	// the target cluster. It is stamped onto every composed Release and Object.
-	// Either it or ProviderConfigRefFrom must supply a name.
+	// A name is required, here or from the overlay.
 	// +optional
 	ProviderConfigRef *ProviderConfigRef `json:"providerConfigRef,omitempty"`
-
-	// ProviderConfigRefFrom names field paths on the observed composite
-	// resource whose values take precedence over the matching ProviderConfigRef
-	// field, so one Composition can target the cluster each composite resource
-	// names.
-	// +optional
-	ProviderConfigRefFrom *ProviderConfigRefFrom `json:"providerConfigRefFrom,omitempty"`
 
 	// SkipDeploymentOrder deploys every component at once rather than
 	// withholding a component until its dependencies report Ready.
@@ -79,18 +75,14 @@ type Criteria struct {
 	Platform string `json:"platform,omitempty"`
 }
 
-// CriteriaFrom values are field paths into the observed composite resource.
-type CriteriaFrom struct {
-	// +optional
-	Accelerator *string `json:"accelerator,omitempty"`
-	// +optional
-	Service *string `json:"service,omitempty"`
-	// +optional
-	Intent *string `json:"intent,omitempty"`
-	// +optional
-	OS *string `json:"os,omitempty"`
-	// +optional
-	Platform *string `json:"platform,omitempty"`
+// An OverlayFrom names where an overlay of the Input is read from.
+type OverlayFrom struct {
+	// FieldPath names an object on the observed composite resource, shaped
+	// like this Input. Its maps are merged over the Input key by key and its
+	// lists replace the Input's; an empty string counts as unset. It may set
+	// any field but overlayFrom. A path that is absent from the composite
+	// resource leaves the Input as it is.
+	FieldPath string `json:"fieldPath"`
 }
 
 // A ProviderConfigRef references a provider config for the target cluster.
@@ -102,15 +94,6 @@ type ProviderConfigRef struct {
 
 	// +optional
 	Name string `json:"name,omitempty"`
-}
-
-// ProviderConfigRefFrom values are field paths into the observed composite
-// resource.
-type ProviderConfigRefFrom struct {
-	// +optional
-	Kind *string `json:"kind,omitempty"`
-	// +optional
-	Name *string `json:"name,omitempty"`
 }
 
 // A ComponentRef names an AICR recipe component.

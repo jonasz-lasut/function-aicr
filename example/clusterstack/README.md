@@ -1,8 +1,8 @@
 # ClusterStack example
 
-Demonstrates `function-aicr` serving an XR it knows nothing about: the criteria
-live on `spec` under names of the XRD author's choosing and reach the function
-through `criteriaFrom`.
+Demonstrates `function-aicr` serving an XR it knows nothing about: the XRD
+declares, under `spec.aicr`, the `Input` fields a `ClusterStack` may set, and
+the Composition's `overlayFrom` merges that object over its static `Input`.
 
 The function validates every composed resource against the provider CRD schema
 Crossplane resolves for it, so `render` must be given those schemas.

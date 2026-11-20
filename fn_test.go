@@ -223,7 +223,7 @@ func TestRunFunction(t *testing.T) {
 		want   want
 	}{
 		"ResolvesRecipeFromAnyXR": {
-			reason: "With schemas resolved, criteriaFrom pulls criteria off an XR the function knows nothing about; overrides and skips are applied.",
+			reason: "With schemas resolved, the overlay read from the XR supplies the criteria, whatever the XR's kind; overrides and skips are applied.",
 			args: args{
 				ctx: context.Background(),
 				req: &fnv1.RunFunctionRequest{
@@ -243,7 +243,7 @@ func TestRunFunction(t *testing.T) {
 			},
 		},
 		"ResolvesProviderConfigFromXR": {
-			reason: "providerConfigRefFrom pulls the provider config off the XR, so one Composition can target the cluster each XR names; the composed Release carries it.",
+			reason: "The overlay supplies the provider config over the static one, so one Composition can target the cluster each XR names; the composed Release carries it.",
 			args: args{
 				ctx: context.Background(),
 				req: &fnv1.RunFunctionRequest{
@@ -444,7 +444,7 @@ func TestRunFunction(t *testing.T) {
 			},
 		},
 		"FatalWhenProviderConfigNameMissing": {
-			reason: "A provider config name must come from providerConfigRef or a providerConfigRefFrom path.",
+			reason: "A provider config name must come from the Input or from its overlay.",
 			args: args{
 				ctx: context.Background(),
 				req: &fnv1.RunFunctionRequest{
@@ -456,7 +456,24 @@ func TestRunFunction(t *testing.T) {
 			want: want{
 				rsp: &fnv1.RunFunctionResponse{
 					Meta:    respMeta,
-					Results: fatal("cannot resolve the provider config reference: providerConfigRef.name is required: set it, or a providerConfigRefFrom.name field path that resolves on the composite resource"),
+					Results: fatal("cannot resolve the provider config reference: providerConfigRef.name is required: set it in the Input, or in the overlay overlayFrom.fieldPath reads from the composite resource"),
+				},
+			},
+		},
+		"FatalWhenInputHasRemovedField": {
+			reason: "A Composition still written for the per-field criteriaFrom is told what replaced it, rather than resolving a recipe without the criteria it meant to state.",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:     meta(),
+					Input:    yamlToProto("input/removed-criteria-from.yaml"),
+					Observed: &fnv1.State{Composite: fixture("observed/xr.yaml")},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta:    respMeta,
+					Results: fatal("cannot resolve the function input: criteriaFrom was removed: read values from the composite resource with overlayFrom.fieldPath"),
 				},
 			},
 		},

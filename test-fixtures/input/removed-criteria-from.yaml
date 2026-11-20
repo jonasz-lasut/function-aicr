@@ -1,0 +1,6 @@
+apiVersion: aicr.fn.crossplane.io/v1beta1
+kind: Input
+criteriaFrom:
+  service: spec.cloud
+providerConfigRef:
+  name: gpu-cluster

@@ -92,9 +92,15 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 	f.log.Info("Running function", "tag", req.GetMeta().GetTag())
 	rsp := response.To(req, f.ttl)
 
-	in := &v1beta1.Input{}
-	if err := request.GetInput(req, in); err != nil {
-		response.Fatal(rsp, errors.Wrapf(err, "cannot get function input from %T", req))
+	oxr, err := request.GetObservedCompositeResource(req)
+	if err != nil {
+		response.Fatal(rsp, errors.Wrapf(err, "cannot get observed composite resource from %T", req))
+		return rsp, nil
+	}
+
+	in, err := resolve.Input(req.GetInput().AsMap(), fieldpath.Pave(oxr.Resource.Object))
+	if err != nil {
+		response.Fatal(rsp, errors.Wrap(err, "cannot resolve the function input"))
 		return rsp, nil
 	}
 
@@ -109,20 +115,13 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 		return rsp, nil
 	}
 
-	oxr, err := request.GetObservedCompositeResource(req)
-	if err != nil {
-		response.Fatal(rsp, errors.Wrapf(err, "cannot get observed composite resource from %T", req))
-		return rsp, nil
-	}
-
-	paved := fieldpath.Pave(oxr.Resource.Object)
-	pcRef, err := resolve.ProviderConfigRef(in, paved)
+	pcRef, err := resolve.ProviderConfigRef(in)
 	if err != nil {
 		response.Fatal(rsp, errors.Wrap(err, "cannot resolve the provider config reference"))
 		return rsp, nil
 	}
 
-	criteria, err := resolve.Criteria(in, paved)
+	criteria, err := resolve.Criteria(in)
 	if err != nil {
 		response.Fatal(rsp, errors.Wrap(err, "cannot resolve AICR recipe criteria"))
 		return rsp, nil
