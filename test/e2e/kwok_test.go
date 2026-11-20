@@ -57,10 +57,13 @@ func TestStockRecipeOnSimulatedNodes(t *testing.T) {
 				funcs.ResourcesHaveFieldValueWithin(2*time.Minute, manifests, xr, "status.aicr.recipeName", "h100-eks-training"),
 				funcs.ResourcesHaveFieldValueWithin(30*time.Second, manifests, xr, "status.aicr.recipeSource", funcs.NotFound),
 			)).
-			Assess("EveryComponentIsDeployed",
-				funcs.ResourcesHaveFieldValueWithin(10*time.Minute, manifests, xr, "status.aicr.pendingComponents", []any{})).
+			// The long wait is on the conditions, which the helper logs when
+			// they change. A wait on a field value logs a diff on every poll,
+			// which here was 1,500 lines of a rollout that went well.
 			Assess("XRIsReady",
-				funcs.ResourcesHaveConditionWithin(10*time.Minute, manifests, xr, xpv2.Available(), xpv2.ReconcileSuccess())).
+				funcs.ResourcesHaveConditionWithin(15*time.Minute, manifests, xr, xpv2.Available(), xpv2.ReconcileSuccess())).
+			Assess("EveryComponentIsDeployed",
+				funcs.ResourcesHaveFieldValueWithin(1*time.Minute, manifests, xr, "status.aicr.pendingComponents", []any{})).
 			Assess("ReleasesAreReady", funcs.AllOf(
 				funcs.ResourceHasConditionWithin(1*time.Minute, release("cert-manager"), xpv2.Available()),
 				funcs.ResourceHasConditionWithin(1*time.Minute, release("gpu-operator"), xpv2.Available()),

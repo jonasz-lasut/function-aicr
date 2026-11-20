@@ -52,6 +52,8 @@ REGISTRY_VERSION ?= 3.0.0
 ORAS_VERSION ?= 1.4.0
 # renovate: datasource=github-releases depName=kubernetes-sigs/kwok
 KWOK_VERSION ?= v0.8.0
+# renovate: datasource=go depName=gotest.tools/gotestsum
+GOTESTSUM_VERSION ?= v1.13.0
 
 # Crossplane's flags. A composite resource whose composed resources all
 # report their status within a few seconds spends the default burst of its
@@ -112,10 +114,12 @@ $(ORAS):
 #                    function-aicr a runtime config without a recipe source
 # make e2e.function  rebuild the image and the package and reinstall them:
 #                    the inner loop after a code change
-# make e2e.test      the suite under test/e2e against the cluster
+# make e2e.test      the suite under test/e2e against the cluster, through
+#                    gotestsum (E2E_TEST_FORMAT)
 # make e2e.down      delete the cluster
-# make e2e.dump      the cluster's state for a failed run, the function pod
-#                    described and logged first
+# make e2e.dump      the cluster's state for a failed run, with the function
+#                    pod's description and log, as files under
+#                    _output/controlplane-dump
 E2E_IMAGE := function-aicr-e2e:dev
 E2E_DIR := $(OUTPUT_DIR)/e2e
 # The cluster's kubeconfig. Every target and the suite itself read this file
@@ -143,7 +147,11 @@ E2E_TEST_SUITE_catalog := base
 E2E_TEST_SUITE_kwok := kwok
 # The flags that point crossplane's e2e environment at a cluster it does not
 # own: the suite neither creates nor destroys it and installs no Crossplane.
-E2E_TEST_FLAGS ?= -v -count=1 -timeout=30m
+E2E_TEST_FLAGS ?= -count=1 -timeout=30m
+# How gotestsum prints the run. testname is one line per feature and step,
+# with the whole log of a feature only when it fails. standard-verbose is
+# what go test -v prints, for a look at a run in progress.
+E2E_TEST_FORMAT ?= testname
 E2E_ENV_FLAGS := --kind-cluster-name=$(KIND_CLUSTER_NAME) --create-kind-cluster=false --destroy-kind-cluster=false --preinstall-crossplane=false --load-images-kind-cluster=false --test-suite=$(E2E_TEST_SUITE_$(E2E_PROFILE))
 
 .PHONY: e2e.up e2e.kubeconfig e2e.crossplane e2e.setup e2e.certs e2e.catalog e2e.kwok e2e.image e2e.function e2e.test e2e.down e2e.dump xpkg.build.function-aicr
@@ -168,8 +176,8 @@ e2e.kubeconfig: $(KIND)
 # init container registers the package CRDs after that.
 e2e.crossplane: $(KUBECTL)
 	@$(INFO) waiting for crossplane and its package api
-	@$(KUBECTL) wait --namespace $(CROSSPLANE_NAMESPACE) --for=condition=Available --timeout=300s deployment/crossplane || $(FAIL)
-	@$(KUBECTL) wait --for=condition=Established --timeout=120s crd/providers.pkg.crossplane.io crd/functions.pkg.crossplane.io crd/deploymentruntimeconfigs.pkg.crossplane.io || $(FAIL)
+	@$(KUBECTL) wait --namespace $(CROSSPLANE_NAMESPACE) --for=condition=Available --timeout=300s deployment/crossplane >/dev/null || $(FAIL)
+	@$(KUBECTL) wait --for=condition=Established --timeout=120s crd/providers.pkg.crossplane.io crd/functions.pkg.crossplane.io crd/deploymentruntimeconfigs.pkg.crossplane.io >/dev/null || $(FAIL)
 	@$(OK) waiting for crossplane and its package api
 
 # A CA and the registry's serving certificate, made once per output
@@ -192,18 +200,20 @@ $(E2E_CERTS)/tls.crt:
 
 # The setup is applied in two steps: the packages and the registry first,
 # then, once the providers' CRDs exist, the provider configs.
+# kubectl's line per object is dropped throughout these targets; what goes
+# wrong still reaches the log through stderr.
 e2e.setup: $(KUBECTL) e2e.certs
 	@$(INFO) setting up the registry, the providers and function-auto-ready
-	@$(KUBECTL) create namespace $(E2E_NAMESPACE) --dry-run=client -o yaml | $(KUBECTL) apply -f - || $(FAIL)
-	@$(KUBECTL) -n $(E2E_NAMESPACE) create secret tls registry-tls --cert=$(E2E_CERTS)/tls.crt --key=$(E2E_CERTS)/tls.key --dry-run=client -o yaml | $(KUBECTL) apply -f - || $(FAIL)
-	@$(KUBECTL) -n $(CROSSPLANE_NAMESPACE) create configmap e2e-registry-ca --from-file=ca.crt=$(E2E_CERTS)/ca.crt --dry-run=client -o yaml | $(KUBECTL) apply -f - || $(FAIL)
-	@sed -e 's|REGISTRY_VERSION|$(REGISTRY_VERSION)|' $(E2E_MANIFESTS)/registry.yaml | $(KUBECTL) apply -f - || $(FAIL)
+	@$(KUBECTL) create namespace $(E2E_NAMESPACE) --dry-run=client -o yaml | $(KUBECTL) apply -f - >/dev/null || $(FAIL)
+	@$(KUBECTL) -n $(E2E_NAMESPACE) create secret tls registry-tls --cert=$(E2E_CERTS)/tls.crt --key=$(E2E_CERTS)/tls.key --dry-run=client -o yaml | $(KUBECTL) apply -f - >/dev/null || $(FAIL)
+	@$(KUBECTL) -n $(CROSSPLANE_NAMESPACE) create configmap e2e-registry-ca --from-file=ca.crt=$(E2E_CERTS)/ca.crt --dry-run=client -o yaml | $(KUBECTL) apply -f - >/dev/null || $(FAIL)
+	@sed -e 's|REGISTRY_VERSION|$(REGISTRY_VERSION)|' $(E2E_MANIFESTS)/registry.yaml | $(KUBECTL) apply -f - >/dev/null || $(FAIL)
 	@sed -e 's|PROVIDER_HELM_VERSION|$(PROVIDER_HELM_VERSION)|' -e 's|PROVIDER_KUBERNETES_VERSION|$(PROVIDER_KUBERNETES_VERSION)|' \
-		-e 's|FUNCTION_AUTO_READY_VERSION|$(FUNCTION_AUTO_READY_VERSION)|' $(E2E_MANIFESTS)/packages.yaml | $(KUBECTL) apply -f - || $(FAIL)
-	@$(KUBECTL) -n $(E2E_NAMESPACE) rollout status deployment/registry --timeout=180s || $(FAIL)
-	@$(KUBECTL) wait provider.pkg.crossplane.io/provider-helm provider.pkg.crossplane.io/provider-kubernetes --for=condition=Healthy --timeout=300s || $(FAIL)
-	@$(KUBECTL) wait function.pkg.crossplane.io/function-auto-ready --for=condition=Healthy --timeout=300s || $(FAIL)
-	@$(KUBECTL) apply -f $(E2E_MANIFESTS)/provider-configs.yaml || $(FAIL)
+		-e 's|FUNCTION_AUTO_READY_VERSION|$(FUNCTION_AUTO_READY_VERSION)|' $(E2E_MANIFESTS)/packages.yaml | $(KUBECTL) apply -f - >/dev/null || $(FAIL)
+	@$(KUBECTL) -n $(E2E_NAMESPACE) rollout status deployment/registry --timeout=180s >/dev/null || $(FAIL)
+	@$(KUBECTL) wait provider.pkg.crossplane.io/provider-helm provider.pkg.crossplane.io/provider-kubernetes --for=condition=Healthy --timeout=300s >/dev/null || $(FAIL)
+	@$(KUBECTL) wait function.pkg.crossplane.io/function-auto-ready --for=condition=Healthy --timeout=300s >/dev/null || $(FAIL)
+	@$(KUBECTL) apply -f $(E2E_MANIFESTS)/provider-configs.yaml >/dev/null || $(FAIL)
 	@$(OK) setting up the registry, the providers and function-auto-ready
 
 # The suite's catalog, published the way docs/operators/recipe-source.md
@@ -227,14 +237,14 @@ e2e.catalog: $(KUBECTL) $(HELM) $(ORAS) e2e.certs
 			$$local/$(E2E_RECIPE_REPOSITORY):e2e recipe.tar.gz:application/vnd.oci.image.layer.v1.tar+gzip >/dev/null && \
 		$(ORAS) resolve --plain-http=false --ca-file $$ca $$local/$(E2E_RECIPE_REPOSITORY):e2e > recipe.digest || $(FAIL)
 	@sed -e 's|RECIPE_OCI_REPOSITORY|$(E2E_REGISTRY)/$(E2E_RECIPE_REPOSITORY)|' -e "s|RECIPE_OCI_DIGEST|$$(cat $(E2E_CATALOG_OUT)/recipe.digest)|" \
-		$(E2E_MANIFESTS)/function-runtime.yaml | $(KUBECTL) apply -f - || $(FAIL)
+		$(E2E_MANIFESTS)/function-runtime.yaml | $(KUBECTL) apply -f - >/dev/null || $(FAIL)
 	@if $(KUBECTL) get function.pkg.crossplane.io/function-aicr >/dev/null 2>&1; then \
 		digest=$$(cat $(E2E_CATALOG_OUT)/recipe.digest); \
 		for try in $$(seq 90); do \
 			$(KUBECTL) -n $(CROSSPLANE_NAMESPACE) get pods -l pkg.crossplane.io/function=function-aicr --field-selector=status.phase=Running \
 				-o jsonpath='{.items[*].spec.containers[0].args}' | grep -q "$$digest" && break; sleep 2; \
 		done; \
-		$(KUBECTL) -n $(CROSSPLANE_NAMESPACE) wait pod -l pkg.crossplane.io/function=function-aicr --for=condition=Ready --timeout=300s || $(FAIL); \
+		$(KUBECTL) -n $(CROSSPLANE_NAMESPACE) wait pod -l pkg.crossplane.io/function=function-aicr --for=condition=Ready --timeout=300s >/dev/null || $(FAIL); \
 	fi
 	@$(OK) publishing the charts and the recipe catalog: $$(cat $(E2E_CATALOG_OUT)/recipe.digest)
 
@@ -249,18 +259,18 @@ e2e.kwok: $(KUBECTL)
 	@$(INFO) installing KWOK $(KWOK_VERSION) and the simulated nodes
 	@$(KUBECTL) apply -f $(KWOK_RELEASE)/kwok.yaml >/dev/null || $(FAIL)
 	@$(KUBECTL) apply -f $(KWOK_RELEASE)/stage-fast.yaml >/dev/null || $(FAIL)
-	@$(KUBECTL) -n kube-system wait --for=condition=Available --timeout=180s deployment/kwok-controller || $(FAIL)
+	@$(KUBECTL) -n kube-system wait --for=condition=Available --timeout=180s deployment/kwok-controller >/dev/null || $(FAIL)
 	@$(KUBECTL) apply -f $(E2E_KWOK_MANIFESTS)/nodes.yaml >/dev/null || $(FAIL)
-	@$(KUBECTL) wait --for=condition=Ready --timeout=60s nodes --selector=type=kwok || $(FAIL)
-	@$(KUBECTL) label node --selector='type!=kwok' eks.amazonaws.com/compute-type=hybrid --overwrite || $(FAIL)
-	@sed -e '/recipe-oci/d' $(E2E_MANIFESTS)/function-runtime.yaml | $(KUBECTL) apply -f - || $(FAIL)
+	@$(KUBECTL) wait --for=condition=Ready --timeout=60s nodes --selector=type=kwok >/dev/null || $(FAIL)
+	@$(KUBECTL) label node --selector='type!=kwok' eks.amazonaws.com/compute-type=hybrid --overwrite >/dev/null || $(FAIL)
+	@sed -e '/recipe-oci/d' $(E2E_MANIFESTS)/function-runtime.yaml | $(KUBECTL) apply -f - >/dev/null || $(FAIL)
 	@$(OK) installing KWOK $(KWOK_VERSION) and the simulated nodes
 
 # The runtime image from this tree, built for the host's architecture with
 # the Go version go.mod names, as the release workflow builds it.
 e2e.image:
 	@$(INFO) building the runtime image $(E2E_IMAGE) for linux/$(TARGETARCH)
-	@docker buildx build --load --platform linux/$(TARGETARCH) --build-arg GO_VERSION=$$(sed -n 's/^go //p' go.mod) -t $(E2E_IMAGE) . || $(FAIL)
+	@docker buildx build --quiet --load --platform linux/$(TARGETARCH) --build-arg GO_VERSION=$$(sed -n 's/^go //p' go.mod) -t $(E2E_IMAGE) . || $(FAIL)
 	@$(OK) building the runtime image $(E2E_IMAGE)
 
 # The Function package from the image: what xpkg.mk's xpkg.build.% would do
@@ -278,7 +288,7 @@ xpkg.build.function-aicr: $(CROSSPLANE_CLI) e2e.image
 local.xpkg.deploy.function.%: $(KIND) $(KUBECTL) local.xpkg.sync
 	@$(INFO) deploying function package $* $(VERSION)
 	@$(KIND) load docker-image $(E2E_IMAGE) -n $(KIND_CLUSTER_NAME) || $(FAIL)
-	@echo '{"apiVersion":"pkg.crossplane.io/v1","kind":"Function","metadata":{"name":"$*"},"spec":{"package":"xpkg.crossplane.internal/dev/$*@$(LOCAL_XPKG_DIGEST)","skipDependencyResolution":true,"packagePullPolicy":"Never","runtimeConfigRef":{"name":"$(FUNCTION_RUNTIME_CONFIG)"}}}' | $(KUBECTL) apply -f - || $(FAIL)
+	@echo '{"apiVersion":"pkg.crossplane.io/v1","kind":"Function","metadata":{"name":"$*"},"spec":{"package":"xpkg.crossplane.internal/dev/$*@$(LOCAL_XPKG_DIGEST)","skipDependencyResolution":true,"packagePullPolicy":"Never","runtimeConfigRef":{"name":"$(FUNCTION_RUNTIME_CONFIG)"}}}' | $(KUBECTL) apply -f - >/dev/null || $(FAIL)
 	@$(OK) deploying function package $* $(VERSION)
 
 # The pod is restarted so that a rebuilt image under the same tag is the one
@@ -288,19 +298,26 @@ local.xpkg.deploy.function.%: $(KIND) $(KUBECTL) local.xpkg.sync
 e2e.function: xpkg.build.function-aicr local.xpkg.deploy.function.function-aicr
 	@$(INFO) waiting for function-aicr to become healthy
 	@$(KUBECTL) -n $(CROSSPLANE_NAMESPACE) delete pod -l pkg.crossplane.io/function=function-aicr --ignore-not-found >/dev/null || $(FAIL)
-	@$(KUBECTL) wait function.pkg.crossplane.io/function-aicr --for=condition=Healthy --timeout=300s || $(FAIL)
+	@$(KUBECTL) wait function.pkg.crossplane.io/function-aicr --for=condition=Healthy --timeout=300s >/dev/null || $(FAIL)
 	@for try in $$(seq 60); do $(KUBECTL) -n $(CROSSPLANE_NAMESPACE) get pods -l pkg.crossplane.io/function=function-aicr -o name | grep -q . && break; sleep 2; done
-	@$(KUBECTL) -n $(CROSSPLANE_NAMESPACE) wait pod -l pkg.crossplane.io/function=function-aicr --for=condition=Ready --timeout=300s || $(FAIL)
+	@$(KUBECTL) -n $(CROSSPLANE_NAMESPACE) wait pod -l pkg.crossplane.io/function=function-aicr --for=condition=Ready --timeout=300s >/dev/null || $(FAIL)
 	@$(OK) waiting for function-aicr to become healthy
 
 e2e.test:
 	@$(INFO) running the end-to-end suite
-	@cd test/e2e && go test $(E2E_TEST_FLAGS) ./... -args $(E2E_ENV_FLAGS) || $(FAIL)
+	@go run gotest.tools/gotestsum@$(GOTESTSUM_VERSION) --version >/dev/null 2>&1 || $(FAIL)
+	@cd test/e2e && go run gotest.tools/gotestsum@$(GOTESTSUM_VERSION) --format $(E2E_TEST_FORMAT) --hide-summary=skipped \
+		--junitfile $(abspath $(E2E_DIR))/tests-$(E2E_PROFILE).xml -- $(E2E_TEST_FLAGS) ./... -args $(E2E_ENV_FLAGS) || $(FAIL)
 	@$(OK) running the end-to-end suite
 
 e2e.down: controlplane.down
 
+# Everything goes to files under the dump directory, which CI uploads: the
+# job's log keeps to what failed.
 e2e.dump: $(KUBECTL)
-	@$(KUBECTL) -n $(CROSSPLANE_NAMESPACE) describe pod -l pkg.crossplane.io/function=function-aicr || true
-	@$(KUBECTL) -n $(CROSSPLANE_NAMESPACE) logs -l pkg.crossplane.io/function=function-aicr --tail=-1 || true
-	@$(MAKE) controlplane.dump
+	@$(INFO) dumping the cluster to $(CONTROLPLANE_DUMP_DIRECTORY)
+	@mkdir -p $(CONTROLPLANE_DUMP_DIRECTORY)
+	@$(KUBECTL) -n $(CROSSPLANE_NAMESPACE) describe pod -l pkg.crossplane.io/function=function-aicr > $(CONTROLPLANE_DUMP_DIRECTORY)/function-aicr.describe.txt 2>&1 || true
+	@$(KUBECTL) -n $(CROSSPLANE_NAMESPACE) logs -l pkg.crossplane.io/function=function-aicr --tail=-1 > $(CONTROLPLANE_DUMP_DIRECTORY)/function-aicr.log 2>&1 || true
+	@$(MAKE) controlplane.dump >/dev/null 2>&1 || true
+	@$(OK) dumping the cluster to $(CONTROLPLANE_DUMP_DIRECTORY)
