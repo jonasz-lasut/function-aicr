@@ -163,6 +163,17 @@
       matchFileNames: ['Makefile', 'test/e2e/**'],
       groupName: 'e2e',
     },
+    // In the suite's module the Kubernetes libraries follow crossplane, whose
+    // test helpers the suite imports: go raises them when a crossplane update
+    // requires newer ones. An update of their own gets ahead of the kubectl
+    // those helpers pull in, which then imports API packages the newer
+    // k8s.io/api has dropped, and the module no longer tidies.
+    {
+      matchManagers: ['gomod'],
+      matchFileNames: ['test/e2e/**'],
+      matchPackageNames: ['k8s.io/**', 'sigs.k8s.io/controller-runtime'],
+      enabled: false,
+    },
     // The make library is not a version Renovate can rate minor or patch.
     { matchManagers: ['git-submodules'], groupName: 'build submodule', automerge: false },
 
