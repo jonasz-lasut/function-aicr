@@ -33,3 +33,4 @@
 - [Development](project/development.md)
 - [Testing](project/testing.md)
 - [Design decisions](project/design-decisions.md)
+  - [Upgrade approval (Draft)](one-pager-upgrade-approval.md)
