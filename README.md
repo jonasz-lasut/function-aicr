@@ -341,20 +341,46 @@ status:
   aicr:
     recipeName: h100-kind-training
     recipeVersion: v1.3.0
-    componentCount: 3
+    appliedOverlays:
+    - base
+    - monitoring-hpa
+    - h100-any
+    - kind
+    - h100-kind-training
+    componentCount: 13
     deployedComponents:
-    - name: cert-manager
+    - name: nodewright-operator
+      namespace: nodewright
+      version: v0.21.0
+    - name: prometheus-operator-crds
+      namespace: monitoring
+      version: 28.0.1
+    # cert-manager, kube-prometheus-stack and nfd follow
+    pendingComponents:
     - name: gpu-operator
+      waitingFor: nfd
+    - name: kai-scheduler
+      waitingFor: gpu-operator
+    # six more follow
 ```
 
-`recipeVersion` is the `aicr.run` module version the function
-was built with — what pins the embedded recipe data. When the function serves
-an [OCI recipe source](#recipe-source), a `recipeSource` key carries its
-`repository@digest` identity, since the module version alone no longer
-describes the overlaid catalog. `deployedComponents` lists, in AICR's
-deployment order, only the components the gate is not withholding. The keys are set individually, so keys already present at the
-path survive. Crossplane prunes any status field the XRD does not declare,
-so the XRD must carry a matching subschema — see
+That is the [example](example/clusterstack/) composite resource once
+`prometheus-operator-crds` is observed `Ready`.
+
+| Key | Meaning |
+|---|---|
+| `recipeName` | The recipe's identifier, built from the criteria. |
+| `recipeVersion` | The `aicr.run` module version the function was built with, which pins the embedded recipe data. |
+| `recipeSource` | The `repository@digest` of the [OCI recipe source](#recipe-source), present only when the function serves one, since the module version alone no longer describes the overlaid catalog. |
+| `profile` | The recipe variant deployed, as `name=value`: the selected one, or the recipe's default. Absent when the recipe declares no profile. |
+| `appliedOverlays` | The catalog overlays the recipe was built from, in order. An overlay an OCI recipe source adds shows up here. |
+| `componentCount` | How many components the recipe deploys for this composite resource. A component that composes no resource isn't counted. |
+| `deployedComponents` | The components the gate isn't withholding, in AICR's deployment order, each with the chart version and namespace it is deployed with. |
+| `pendingComponents` | The components the gate still withholds, each with the dependency or pre-manifest `Object` it waits for. Empty once everything is emitted. |
+
+The keys are set individually, so keys already present at the path survive.
+Crossplane prunes any status field the XRD doesn't declare, so the XRD must
+carry a matching subschema: see
 [`example/clusterstack/definition.yaml`](example/clusterstack/definition.yaml).
 
 ## Input reference

@@ -54,6 +54,13 @@ spec:
                     type: string
                   recipeSource:
                     type: string
+                  profile:
+                    type: string
+                  appliedOverlays:
+                    type: array
+                    items:
+                      type: string
+                    x-kubernetes-list-type: atomic
                   componentCount:
                     type: integer
                   deployedComponents:
@@ -64,6 +71,24 @@ spec:
                       - name
                       properties:
                         name:
+                          type: string
+                        version:
+                          type: string
+                        namespace:
+                          type: string
+                    x-kubernetes-list-type: map
+                    x-kubernetes-list-map-keys:
+                    - name
+                  pendingComponents:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                      - name
+                      properties:
+                        name:
+                          type: string
+                        waitingFor:
                           type: string
                     x-kubernetes-list-type: map
                     x-kubernetes-list-map-keys:

@@ -193,8 +193,9 @@ spec:
               fieldPath:
                 description: |-
                   FieldPath names the object on the composite resource that receives the
-                  summary keys (recipeName, recipeVersion, componentCount,
-                  deployedComponents). It must begin with "status". Keys already present
+                  summary keys (recipeName, recipeVersion, recipeSource, profile,
+                  appliedOverlays, componentCount, deployedComponents,
+                  pendingComponents). It must begin with "status". Keys already present
                   at the path are preserved; the summary keys are set alongside them.
                 pattern: ^status(\..+)?$
                 type: string

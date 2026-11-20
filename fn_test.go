@@ -1508,9 +1508,9 @@ func TestDeployed(t *testing.T) {
 			want:   want{deployed: []string{chartBacked}},
 		},
 		"ManifestOnlyWithoutObjects": {
-			reason: "A manifest-only component that emitted no Objects has nothing to withhold and counts as deployed.",
+			reason: "A manifest-only component whose manifest files rendered no document composes nothing, so there is nothing of it to report as deployed.",
 			args:   args{desired: desiredOf(chartBacked), objects: manifestObjects{}},
-			want:   want{deployed: []string{manifestOnly, chartBacked}},
+			want:   want{deployed: []string{chartBacked}},
 		},
 	}
 
@@ -1520,6 +1520,120 @@ func TestDeployed(t *testing.T) {
 			got := s.deployed(order)
 			if diff := cmp.Diff(tc.want.deployed, got); diff != "" {
 				t.Errorf("%s\ndeployed(...): -want, +got:\n%s", tc.reason, diff)
+			}
+		})
+	}
+}
+
+func TestSummary(t *testing.T) {
+	const (
+		crds      = "prometheus-operator-crds"
+		operator  = "gpu-operator"
+		scheduler = "kai-scheduler"
+		tuning    = "nodewright-customizations"
+		labeler   = "dra-node-labeler"
+		tuningCR  = "nodewright-customizations-post-nodewright-tuning"
+	)
+	managed := map[string]*recipe.ComponentRef{
+		crds:      {Name: crds, Type: recipe.ComponentTypeHelm, Namespace: "monitoring", Version: "28.0.1", Source: "https://example.com", Chart: crds},
+		operator:  {Name: operator, Type: recipe.ComponentTypeHelm, Namespace: "gpu-operator", Version: "v26.7.2", Source: "https://example.com", Chart: operator},
+		scheduler: {Name: scheduler, Type: recipe.ComponentTypeHelm, Namespace: "kai-scheduler", Version: "v0.16.9", Source: "https://example.com", Chart: scheduler},
+		tuning:    {Name: tuning, Type: recipe.ComponentTypeHelm, Namespace: "nodewright", ManifestFiles: []string{"tuning.yaml"}},
+		// Manifest-only, and its one manifest file rendered no document.
+		labeler: {Name: labeler, Type: recipe.ComponentTypeHelm, Namespace: "gpu-operator", ManifestFiles: []string{"labeler.yaml"}},
+	}
+	criteria := &recipe.Criteria{Accelerator: "h100", Service: "eks", Intent: "training"}
+	desiredOf := func(names ...string) map[resource.Name]*resource.DesiredComposed {
+		d := make(map[resource.Name]*resource.DesiredComposed, len(names))
+		for _, n := range names {
+			d[resource.Name(n)] = &resource.DesiredComposed{Resource: composed.New()}
+		}
+		return d
+	}
+
+	type args struct {
+		s   *stack
+		res *recipe.RecipeResult
+	}
+	type want struct {
+		summary map[string]any
+	}
+
+	cases := map[string]struct {
+		reason string
+		args   args
+		want   want
+	}{
+		"MidRollout": {
+			reason: "Deployed components carry the version and namespace they are deployed with, an override and a kept namespace included; withheld ones are pending with what they wait for; a component that composes nothing is neither listed nor counted.",
+			args: args{
+				s: &stack{
+					managed:      managed,
+					desired:      desiredOf(crds, operator),
+					objects:      manifestObjects{post: map[string][]string{tuning: {tuningCR}}},
+					overrides:    map[string]*compose.Override{operator: {Version: "v99.0.0", Namespace: "nvidia"}},
+					waiting:      map[string]string{scheduler: operator, tuning: "nodewright-operator"},
+					recipeSource: "ghcr.io/acme/aicr-recipes@sha256:8ac7",
+				},
+				res: &recipe.RecipeResult{
+					DeploymentOrder: []string{crds, operator, labeler, scheduler, tuning, "skipped"},
+					Metadata: recipe.RecipeResultMetadata{
+						Version:         "v1.3.0",
+						SelectedProfile: &recipe.SelectedProfile{Name: "gpuStack", Value: "dra"},
+						AppliedOverlays: []string{"base", "eks", "h100-eks-training"},
+					},
+				},
+			},
+			want: want{summary: map[string]any{
+				"recipeName":      "h100-eks-training",
+				"recipeVersion":   "v1.3.0",
+				"recipeSource":    "ghcr.io/acme/aicr-recipes@sha256:8ac7",
+				"profile":         "gpuStack=dra",
+				"appliedOverlays": []string{"base", "eks", "h100-eks-training"},
+				"componentCount":  4,
+				"deployedComponents": []map[string]string{
+					{"name": crds, "version": "28.0.1", "namespace": "monitoring"},
+					{"name": operator, "version": "v99.0.0", "namespace": "nvidia"},
+				},
+				"pendingComponents": []map[string]string{
+					{"name": scheduler, "waitingFor": operator},
+					{"name": tuning, "waitingFor": "nodewright-operator"},
+				},
+			}},
+		},
+		"EverythingDeployed": {
+			reason: "With nothing withheld the pending list is empty rather than absent, a manifest-only component is listed without a version, and a recipe without a profile, overlays or an OCI source omits those keys.",
+			args: args{
+				s: &stack{
+					managed: managed,
+					desired: desiredOf(crds, operator, scheduler, tuningCR),
+					objects: manifestObjects{post: map[string][]string{tuning: {tuningCR}}},
+				},
+				res: &recipe.RecipeResult{
+					DeploymentOrder: []string{crds, operator, labeler, scheduler, tuning},
+					Metadata:        recipe.RecipeResultMetadata{Version: "v1.3.0"},
+				},
+			},
+			want: want{summary: map[string]any{
+				"recipeName":     "h100-eks-training",
+				"recipeVersion":  "v1.3.0",
+				"componentCount": 4,
+				"deployedComponents": []map[string]string{
+					{"name": crds, "version": "28.0.1", "namespace": "monitoring"},
+					{"name": operator, "version": "v26.7.2", "namespace": "gpu-operator"},
+					{"name": scheduler, "version": "v0.16.9", "namespace": "kai-scheduler"},
+					{"name": tuning, "namespace": "nodewright"},
+				},
+				"pendingComponents": []map[string]string{},
+			}},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := tc.args.s.summary(criteria, tc.args.res)
+			if diff := cmp.Diff(tc.want.summary, got); diff != "" {
+				t.Errorf("%s\nsummary(...): -want, +got:\n%s", tc.reason, diff)
 			}
 		})
 	}

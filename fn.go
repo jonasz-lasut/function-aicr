@@ -268,6 +268,9 @@ type stack struct {
 	// its pre-manifest and post-manifest files. The gate correlates observed
 	// against desired resources by these names.
 	objects manifestObjects
+	// waiting names, per component the gate withheld, what it waits for: a
+	// dependency, or one of its own pre-manifest Objects.
+	waiting map[string]string
 }
 
 // keepNamespaces makes a component that is already deployed keep the
@@ -469,12 +472,14 @@ func (s *stack) composeObjects() error {
 // the managed set are treated as satisfied — the user opted to manage them
 // elsewhere.
 func (s *stack) gate(rsp *fnv1.RunFunctionResponse) {
+	s.waiting = make(map[string]string)
 	for _, name := range slices.Sorted(maps.Keys(s.managed)) {
 		c := s.managed[name]
 		dep, blocked := s.blockingDependency(c)
 
 		if c.IsManifestOnlyHelm() {
 			if blocked && s.withhold(s.objects.all(name)...) {
+				s.waiting[name] = dep
 				response.Normalf(rsp, "delaying objects of %q until dependency %q is ready", name, dep)
 			}
 			continue
@@ -485,9 +490,11 @@ func (s *stack) gate(rsp *fnv1.RunFunctionResponse) {
 				response.Normalf(rsp, "delaying pre-manifest objects of %q until dependency %q is ready", name, dep)
 			}
 			if s.withhold(name) {
+				s.waiting[name] = dep
 				response.Normalf(rsp, "delaying %q until dependency %q is ready", name, dep)
 			}
 		} else if obj, unready := s.firstUnready(s.objects.pre[name]); unready && s.withhold(name) {
+			s.waiting[name] = obj
 			response.Normalf(rsp, "delaying %q until pre-manifest object %q is ready", name, obj)
 		}
 
@@ -556,9 +563,18 @@ func (s *stack) withhold(names ...string) bool {
 	return removed
 }
 
+// composes reports whether a managed component composes any resource. A
+// chart-backed component always does; a manifest-only one only when one of
+// its manifest files rendered a document, which a file whose template gates
+// everything off does not.
+func (s *stack) composes(name string) bool {
+	return !s.managed[name].IsManifestOnlyHelm() || len(s.objects.all(name)) > 0
+}
+
 // deployed lists, in AICR's deployment order, the managed components the gate
 // did not withhold: a chart-backed component's Release, or every Object of a
-// manifest-only component, is present in desired.
+// manifest-only component, is present in desired. A component that composes
+// nothing is never deployed.
 func (s *stack) deployed(order []string) []string {
 	inDesired := func(names ...string) bool {
 		for _, n := range names {
@@ -571,7 +587,7 @@ func (s *stack) deployed(order []string) []string {
 	deployed := make([]string, 0, len(s.managed))
 	for _, name := range order {
 		c, ok := s.managed[name]
-		if !ok {
+		if !ok || !s.composes(name) {
 			continue
 		}
 		if c.IsManifestOnlyHelm() && !inDesired(s.objects.all(name)...) {
@@ -586,21 +602,56 @@ func (s *stack) deployed(order []string) []string {
 }
 
 // summary is the resolved-recipe summary written to the composite resource:
-// the recipe's identity and the components deployed so far, in AICR's order.
+// the recipe's identity, and of the components that compose a resource, the
+// ones deployed so far and the ones the gate still withholds, in AICR's order.
+// A deployed component is listed with the chart version and namespace it is
+// deployed with, overrides and a kept namespace included.
 func (s *stack) summary(criteria *recipe.Criteria, res *recipe.RecipeResult) map[string]any {
-	deployed := s.deployed(res.DeploymentOrder)
-	components := make([]map[string]string, 0, len(deployed))
-	for _, name := range deployed {
-		components = append(components, map[string]string{"name": name})
+	isDeployed := make(map[string]bool, len(s.managed))
+	for _, name := range s.deployed(res.DeploymentOrder) {
+		isDeployed[name] = true
 	}
+
+	deployed := make([]map[string]string, 0, len(isDeployed))
+	pending := make([]map[string]string, 0)
+	for _, name := range res.DeploymentOrder {
+		c, ok := s.managed[name]
+		if !ok || !s.composes(name) {
+			continue
+		}
+		entry := map[string]string{"name": name}
+		if !isDeployed[name] {
+			if blocker := s.waiting[name]; blocker != "" {
+				entry["waitingFor"] = blocker
+			}
+			pending = append(pending, entry)
+			continue
+		}
+		namespace, version := compose.Placement(c, s.overrides[name])
+		if version != "" {
+			entry["version"] = version
+		}
+		if namespace != "" {
+			entry["namespace"] = namespace
+		}
+		deployed = append(deployed, entry)
+	}
+
 	summary := map[string]any{
 		"recipeName":         recipeName(criteria),
 		"recipeVersion":      res.Metadata.Version,
-		"componentCount":     len(deployed),
-		"deployedComponents": components,
+		"componentCount":     len(deployed) + len(pending),
+		"deployedComponents": deployed,
+		"pendingComponents":  pending,
 	}
 	if s.recipeSource != "" {
 		summary["recipeSource"] = s.recipeSource
+	}
+	if p := res.Metadata.SelectedProfile; p != nil {
+		summary["profile"] = p.Name + "=" + p.Value
+	}
+	if len(res.Metadata.AppliedOverlays) > 0 {
+		summary["appliedOverlays"] = res.Metadata.AppliedOverlays
 	}
 	return summary
 }

@@ -175,8 +175,9 @@ type ComponentOverride struct {
 // A Target names where the resolved-recipe summary is written.
 type Target struct {
 	// FieldPath names the object on the composite resource that receives the
-	// summary keys (recipeName, recipeVersion, componentCount,
-	// deployedComponents). It must begin with "status". Keys already present
+	// summary keys (recipeName, recipeVersion, recipeSource, profile,
+	// appliedOverlays, componentCount, deployedComponents,
+	// pendingComponents). It must begin with "status". Keys already present
 	// at the path are preserved; the summary keys are set alongside them.
 	// +kubebuilder:validation:Pattern=`^status(\..+)?$`
 	FieldPath string `json:"fieldPath"`

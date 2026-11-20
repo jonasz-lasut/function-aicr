@@ -6,11 +6,24 @@ metadata:
   namespace: default
 status:
   aicr:
+    appliedOverlays:
+    - base
+    - monitoring-hpa
+    - h100-any
+    - kind
+    - h100-kind-training
     componentCount: 3
     deployedComponents:
     - name: cert-manager
+      namespace: cert-manager
+      version: v1.20.2
     - name: gpu-operator
+      namespace: gpu-operator
+      version: v99.0.0
     - name: kai-scheduler
+      namespace: kai-scheduler
+      version: v0.16.9
+    pendingComponents: []
     recipeName: h100-kind-training
     recipeSource: ghcr.io/acme/aicr-recipes@sha256:8ac7f6d54e8bcbf074f156a11f2c8c1ca6dcafed85e880e99a3126c0810cd66f
     recipeVersion: v0.0.0-test
