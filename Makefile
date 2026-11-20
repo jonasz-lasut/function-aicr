@@ -56,9 +56,13 @@ KWOK_VERSION ?= v0.8.0
 # Crossplane's flags. A composite resource whose composed resources all
 # report their status within a few seconds spends the default burst of its
 # watch circuit breaker (100 events) at once. The breaker then lets one event
-# through every 30 seconds for five minutes, which a feature would spend
-# waiting for the next step of a rollout.
+# through every 30 seconds for five minutes, which each feature of the
+# catalog profile would spend waiting for the next step of a rollout. The
+# kwok profile keeps Crossplane's defaults: its one feature shows a stock
+# recipe rolling out at the pace an operator gets.
+ifeq ($(E2E_PROFILE),catalog)
 CROSSPLANE_ARGS ?= --circuit-breaker-burst=1000
+endif
 
 include build/makelib/common.mk
 include build/makelib/k8s_tools.mk
