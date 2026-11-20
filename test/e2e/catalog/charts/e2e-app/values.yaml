@@ -1,0 +1,7 @@
+# Written to the ConfigMap, where a test reads back what the release was
+# installed with.
+message: ""
+# Placement of the pod. The suite keeps the pod pending, and so the release
+# short of ready, with a selector no node matches yet.
+nodeSelector: {}
+tolerations: []

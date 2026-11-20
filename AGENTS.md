@@ -284,11 +284,14 @@ go test -race ./...
 
 `test/e2e` runs the function as a control plane does: built from the tree, installed as a Function package in a kind cluster with Crossplane, provider-helm and provider-kubernetes (a `ClusterProviderConfig` named `e2e` on each, pointing at the kind cluster itself), function-auto-ready and an OCI registry at `registry.e2e.svc:5443`. `test/e2e/README.md` is the reference.
 
+The suite deploys a catalog of its own, `test/e2e/catalog`: one chart that starts a pause container (`charts/e2e-app`) and a recipe tree (`recipe/`) with three components, `e2e-first` (a chart), `e2e-second` (a chart that depends on it, with a pre-manifest and a post-manifest file) and `e2e-notes` (manifest-only, depends on `e2e-second`). `make e2e.catalog` pushes both to the registry and applies the function's runtime config with the recipe artifact's digest, so the function serves the catalog through `--recipe-oci-*`, the same path an operator's catalog takes. AICR layers it over the embedded catalog, so `recipe/overlays` replaces the stock `base`, `kind` and `monitoring-hpa` overlays, which the suite's criteria (`service: kind`, and with `intent: training` a recipe that moves `e2e-first` to another namespace) would otherwise also select. `TestEndToEndCatalog` (`e2e_catalog_test.go`, a unit test) resolves both recipes through a layered provider and fails when an AICR bump adds a stock overlay that joins them: replace that overlay in the catalog too.
+
 ```bash
 git submodule update --init   # crossplane/build, once
 make e2e.up                   # kind, Crossplane, providers, registry, the function from this tree
 make e2e.test                 # go test in test/e2e against that cluster
 make e2e.function             # rebuild and reinstall the function after a code change
+make e2e.catalog              # publish the catalog again after a change to it
 make e2e.down
 ```
 
@@ -296,7 +299,9 @@ Two things hold it together. The Makefile uses the make library of the `build` s
 
 Write a feature the way crossplane/crossplane does: a `Test...` function handing `environment.Test` a `features.NewWithDescription(...)`, labelled with `LabelArea`, `LabelSize` and `config.LabelTestSuite` (a feature without the last is failed by `TestMain`), its manifests under `test/e2e/manifests/<area>/<feature>/` and applied with `funcs.ApplyResources`. The Makefile is for the end-to-end cluster only: building, testing, generating and linting stay plain Go commands.
 
-`.github/workflows/e2e.yml` runs the suite on demand: from the Actions tab, or on a pull request labelled `e2e`. Renovate keeps the Makefile's pins, the suite's Go module and the submodule in groups that never automerge, since no required check exercises them.
+The recipe features (`recipe_test.go`) share one XRD and Composition (`manifests/recipe/setup`) and each creates one composite resource in `default`, one at a time, deleted in the foreground so the next feature does not find the same Helm releases. A feature controls readiness without touching the Release: `TestRolloutOrder` gives `e2e-first`'s pod a node selector no node matches and labels the node to let it through. Crossplane runs with `--circuit-breaker-burst=1000` (`CROSSPLANE_ARGS`): with the default burst of 100 a rollout opens the composite resource's watch circuit breaker within seconds and every further gate step waits up to 30 seconds.
+
+`.github/workflows/e2e.yml` runs the suite on every pull request and on `main`. It is not a required check of the `protect-main` ruleset, so Renovate keeps the Makefile's pins, the suite's Go module and the submodule in groups that never automerge: GitHub's auto-merge would not wait for it.
 
 ### Test Patterns
 

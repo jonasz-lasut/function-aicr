@@ -1,7 +1,9 @@
 # function-aicr's runtime config in the suite: the image `make e2e.image`
-# builds and `kind load` puts on the node, debug logging, and the registry's
-# CA in the trust store, since AICR pulls an OCI recipe source over HTTPS
-# only. local.xpkg.deploy.function.% installs the Function with this config.
+# builds and `kind load` puts on the node, debug logging, the suite's recipe
+# catalog as the OCI recipe source, and the registry's CA in the trust store,
+# since AICR pulls a recipe source over HTTPS only. `make e2e.catalog`
+# substitutes the repository and the digest and applies the config;
+# local.xpkg.deploy.function.% installs the Function with it.
 apiVersion: pkg.crossplane.io/v1beta1
 kind: DeploymentRuntimeConfig
 metadata:
@@ -19,6 +21,8 @@ spec:
             imagePullPolicy: IfNotPresent
             args:
             - --debug
+            - --recipe-oci-repository=RECIPE_OCI_REPOSITORY
+            - --recipe-oci-digest=RECIPE_OCI_DIGEST
             env:
             - name: SSL_CERT_FILE
               value: /etc/function-aicr/registry-ca/ca.crt

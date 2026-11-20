@@ -40,6 +40,16 @@ PROVIDER_KUBERNETES_VERSION ?= v1.4.1
 FUNCTION_AUTO_READY_VERSION ?= v0.7.3
 # renovate: datasource=docker depName=registry
 REGISTRY_VERSION ?= 3.0.0
+# The release without its tag's `v`, as the archive is named.
+# renovate: datasource=github-releases depName=oras-project/oras extractVersion=^v(?<version>.*)$
+ORAS_VERSION ?= 1.4.0
+
+# Crossplane's flags. A composite resource whose composed resources all
+# report their status within a few seconds spends the default burst of its
+# watch circuit breaker (100 events) at once. The breaker then lets one event
+# through every 30 seconds for five minutes, which a feature would spend
+# waiting for the next step of a rollout.
+CROSSPLANE_ARGS ?= --circuit-breaker-burst=1000
 
 include build/makelib/common.mk
 include build/makelib/k8s_tools.mk
@@ -48,6 +58,17 @@ include build/makelib/controlplane.mk
 # xpkg.mk would have written it; the Function package target below does.
 XPKG_OUTPUT_DIR := $(OUTPUT_DIR)/xpkg
 include build/makelib/local.xpkg.mk
+
+# oras publishes the suite's recipe catalog; installed as k8s_tools.mk
+# installs its tools.
+ORAS := $(TOOLS_HOST_DIR)/oras-$(ORAS_VERSION)
+$(ORAS):
+	@$(INFO) installing oras $(ORAS_VERSION)
+	@mkdir -p $(TOOLS_HOST_DIR)/tmp-oras
+	@curl -fsSL https://github.com/oras-project/oras/releases/download/v$(ORAS_VERSION)/oras_$(ORAS_VERSION)_$(HOSTOS)_$(SAFEHOSTARCH).tar.gz | tar -xz -C $(TOOLS_HOST_DIR)/tmp-oras || $(FAIL)
+	@mv $(TOOLS_HOST_DIR)/tmp-oras/oras $(ORAS)
+	@rm -fr $(TOOLS_HOST_DIR)/tmp-oras
+	@$(OK) installing oras $(ORAS_VERSION)
 
 # The end-to-end suite
 #
@@ -58,9 +79,13 @@ include build/makelib/local.xpkg.mk
 #                    suite's setup (e2e.setup: the registry behind TLS from a
 #                    CA made here, provider-helm and provider-kubernetes with
 #                    a ClusterProviderConfig for the cluster itself,
-#                    function-auto-ready, function-aicr's runtime config),
+#                    function-auto-ready), the suite's catalog (e2e.catalog),
 #                    then function-aicr's image and package installed from
 #                    this tree (e2e.function)
+# make e2e.catalog   publish the charts and the recipe catalog under
+#                    test/e2e/catalog to the registry and point function-aicr
+#                    at the catalog's digest: the inner loop after a change
+#                    to the catalog
 # make e2e.function  rebuild the image and the package and reinstall them:
 #                    the inner loop after a code change
 # make e2e.test      the suite under test/e2e against the cluster
@@ -75,13 +100,19 @@ E2E_MANIFESTS := test/e2e/manifests/setup
 # The registry's name inside the cluster; its certificate names it.
 E2E_REGISTRY_HOST := registry.$(E2E_NAMESPACE).svc
 E2E_REGISTRY := $(E2E_REGISTRY_HOST):5443
+# The host's port the registry is forwarded to while the catalog is published.
+E2E_REGISTRY_LOCAL_PORT ?= 5443
+E2E_CATALOG := test/e2e/catalog
+E2E_CATALOG_OUT := $(E2E_DIR)/catalog
+# The recipe catalog's repository; the function is given its manifest digest.
+E2E_RECIPE_REPOSITORY := recipes/e2e
 FUNCTION_RUNTIME_CONFIG := function-aicr-e2e
 # The flags that point crossplane's e2e environment at a cluster it does not
 # own: the suite neither creates nor destroys it and installs no Crossplane.
 E2E_TEST_FLAGS ?= -v -count=1 -timeout=30m
 E2E_ENV_FLAGS := --kind-cluster-name=$(KIND_CLUSTER_NAME) --create-kind-cluster=false --destroy-kind-cluster=false --preinstall-crossplane=false --load-images-kind-cluster=false
 
-.PHONY: e2e.up e2e.crossplane e2e.setup e2e.certs e2e.image e2e.function e2e.test e2e.down e2e.dump xpkg.build.function-aicr
+.PHONY: e2e.up e2e.crossplane e2e.setup e2e.certs e2e.catalog e2e.image e2e.function e2e.test e2e.down e2e.dump xpkg.build.function-aicr
 
 e2e.init: e2e.up
 e2e.run: e2e.test
@@ -89,6 +120,7 @@ e2e.done: e2e.down
 
 e2e.up: controlplane.up e2e.crossplane
 	@$(MAKE) e2e.setup
+	@$(MAKE) e2e.catalog
 	@$(MAKE) e2e.function
 	@$(OK) the end-to-end cluster is up: make e2e.test runs the suite
 
@@ -101,8 +133,9 @@ e2e.crossplane: $(KUBECTL)
 	@$(OK) waiting for crossplane and its package api
 
 # A CA and the registry's serving certificate, made once per output
-# directory. The function trusts the CA through SSL_CERT_FILE; AICR's recipe
-# pull speaks HTTPS only.
+# directory. The function and provider-helm trust the CA through the
+# environment; AICR's recipe pull speaks HTTPS only. The certificate also
+# names localhost, where the registry is forwarded to for a push.
 e2e.certs: $(E2E_CERTS)/tls.crt
 $(E2E_CERTS)/tls.crt:
 	@$(INFO) creating the registry CA and certificate
@@ -127,12 +160,35 @@ e2e.setup: $(KUBECTL) e2e.certs
 	@sed -e 's|REGISTRY_VERSION|$(REGISTRY_VERSION)|' $(E2E_MANIFESTS)/registry.yaml | $(KUBECTL) apply -f - || $(FAIL)
 	@sed -e 's|PROVIDER_HELM_VERSION|$(PROVIDER_HELM_VERSION)|' -e 's|PROVIDER_KUBERNETES_VERSION|$(PROVIDER_KUBERNETES_VERSION)|' \
 		-e 's|FUNCTION_AUTO_READY_VERSION|$(FUNCTION_AUTO_READY_VERSION)|' $(E2E_MANIFESTS)/packages.yaml | $(KUBECTL) apply -f - || $(FAIL)
-	@$(KUBECTL) apply -f $(E2E_MANIFESTS)/function-runtime.yaml || $(FAIL)
 	@$(KUBECTL) -n $(E2E_NAMESPACE) rollout status deployment/registry --timeout=180s || $(FAIL)
 	@$(KUBECTL) wait provider.pkg.crossplane.io/provider-helm provider.pkg.crossplane.io/provider-kubernetes --for=condition=Healthy --timeout=300s || $(FAIL)
 	@$(KUBECTL) wait function.pkg.crossplane.io/function-auto-ready --for=condition=Healthy --timeout=300s || $(FAIL)
 	@$(KUBECTL) apply -f $(E2E_MANIFESTS)/provider-configs.yaml || $(FAIL)
 	@$(OK) setting up the registry, the providers and function-auto-ready
+
+# The suite's catalog, published the way docs/operators/recipe-source.md
+# tells an operator to publish one: the charts with helm push, the recipe
+# tree as one tar+gzip layer with oras. The registry is reached through a
+# port-forward for the length of the recipe; oras would speak plain HTTP to
+# localhost unless told not to. The function's runtime config
+# is applied last, with the digest the recipe artifact got, and Crossplane
+# restarts a function that is already installed on it.
+e2e.catalog: $(KUBECTL) $(HELM) $(ORAS) e2e.certs
+	@$(INFO) publishing the charts and the recipe catalog to $(E2E_REGISTRY)
+	@rm -rf $(E2E_CATALOG_OUT) && mkdir -p $(E2E_CATALOG_OUT)
+	@for chart in $(E2E_CATALOG)/charts/*/; do $(HELM) package $$chart --destination $(E2E_CATALOG_OUT) >/dev/null || exit 1; done
+	@COPYFILE_DISABLE=1 tar -czf $(E2E_CATALOG_OUT)/recipe.tar.gz -C $(E2E_CATALOG)/recipe registry.yaml overlays components || $(FAIL)
+	@$(KUBECTL) -n $(E2E_NAMESPACE) port-forward service/registry $(E2E_REGISTRY_LOCAL_PORT):5443 >/dev/null 2>&1 & forward=$$!; \
+		trap "kill $$forward" EXIT; \
+		local=localhost:$(E2E_REGISTRY_LOCAL_PORT); ca=$(abspath $(E2E_CERTS)/ca.crt); \
+		for try in $$(seq 30); do curl -fsS --cacert $$ca https://$$local/v2/ >/dev/null 2>&1 && break; sleep 1; done; \
+		for chart in $(E2E_CATALOG_OUT)/*.tgz; do $(HELM) push $$chart oci://$$local/charts --ca-file $$ca >/dev/null 2>&1 || exit 1; done; \
+		cd $(E2E_CATALOG_OUT) && $(ORAS) push --plain-http=false --ca-file $$ca --artifact-type application/vnd.nvidia.aicr.artifact \
+			$$local/$(E2E_RECIPE_REPOSITORY):e2e recipe.tar.gz:application/vnd.oci.image.layer.v1.tar+gzip >/dev/null && \
+		$(ORAS) resolve --plain-http=false --ca-file $$ca $$local/$(E2E_RECIPE_REPOSITORY):e2e > recipe.digest || $(FAIL)
+	@sed -e 's|RECIPE_OCI_REPOSITORY|$(E2E_REGISTRY)/$(E2E_RECIPE_REPOSITORY)|' -e "s|RECIPE_OCI_DIGEST|$$(cat $(E2E_CATALOG_OUT)/recipe.digest)|" \
+		$(E2E_MANIFESTS)/function-runtime.yaml | $(KUBECTL) apply -f - || $(FAIL)
+	@$(OK) publishing the charts and the recipe catalog: $$(cat $(E2E_CATALOG_OUT)/recipe.digest)
 
 # The runtime image from this tree, built for the host's architecture.
 e2e.image:

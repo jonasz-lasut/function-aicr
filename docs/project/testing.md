@@ -70,7 +70,9 @@ the function, not the test.
 builds it from the tree and installs it as a Function package in a kind
 cluster, next to Crossplane, provider-helm, provider-kubernetes,
 `function-auto-ready` and an OCI registry. The providers compose into the
-kind cluster itself.
+kind cluster itself. The registry has a small catalog of the suite's own,
+which the function serves as its OCI recipe source. A feature deploys one of
+its recipes in seconds.
 
 ```shell
 git submodule update --init   # the Crossplane build submodule, once
@@ -85,9 +87,8 @@ The suite follows the one in `crossplane/crossplane`. Features are built with
 manifests in a directory under `test/e2e/manifests/`. It's a Go module of its
 own, so `go test ./...` at the root doesn't build it.
 
-CI runs it on demand: from the Actions tab, or on a pull request with the
-`e2e` label. [`test/e2e/README.md`][e2e-readme] describes the cluster and
-how to add a feature.
+CI runs it on every pull request. [`test/e2e/README.md`][e2e-readme]
+describes the cluster, the catalog and how to add a feature.
 
 ## Conventions
 

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: e2e-app
+description: The workload the end-to-end suite's catalog deploys.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

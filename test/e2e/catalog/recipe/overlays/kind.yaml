@@ -1,0 +1,9 @@
+# Replaces the stock kind overlay, so that the criteria `service: kind` select
+# the base recipe alone.
+kind: RecipeMetadata
+apiVersion: aicr.run/v1beta1
+metadata:
+  name: kind
+spec:
+  criteria:
+    service: kind

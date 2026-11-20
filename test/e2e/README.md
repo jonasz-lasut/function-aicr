@@ -5,6 +5,12 @@ built from this tree and installed as a Function package by Crossplane in a
 kind cluster, where provider-helm and provider-kubernetes compose into the
 cluster itself.
 
+The suite deploys a catalog of its own, `catalog/`: three small components
+with one chart that starts a pause container. The catalog is published to a
+registry in the cluster and given to the function as its OCI recipe source.
+A run pulls nothing from outside the cluster but the packages, and takes a
+few minutes.
+
 It follows [the suite of `crossplane/crossplane`][crossplane-e2e]. Features
 are built with [`sigs.k8s.io/e2e-framework`][e2e-framework], run through
 Crossplane's e2e environment (`test/e2e/config`) and assembled from its
@@ -21,6 +27,7 @@ git submodule update --init   # the Crossplane build submodule, once
 make e2e.up                   # kind, Crossplane, the providers, the registry, the function
 make e2e.test                 # the suite
 make e2e.function             # after a code change: rebuild and reinstall the function
+make e2e.catalog              # after a change to the catalog: publish it again
 make e2e.down
 ```
 
@@ -30,7 +37,7 @@ make e2e.down
 One feature runs with Go's own filter:
 
 ```shell
-make e2e.test E2E_TEST_FLAGS='-v -count=1 -run TestFunctionInstalled'
+make e2e.test E2E_TEST_FLAGS='-v -count=1 -run TestRolloutOrder'
 ```
 
 ## The cluster
@@ -41,15 +48,39 @@ submodule (pinned `kind`, `kubectl`, `helm` and `crossplane` under
 
 | Piece | Where it comes from |
 |---|---|
-| kind and Crossplane | `controlplane.up`, at `CROSSPLANE_VERSION` |
+| kind and Crossplane | `controlplane.up`, at `CROSSPLANE_VERSION` and with `CROSSPLANE_ARGS` |
 | An OCI registry at `registry.e2e.svc:5443` | `manifests/setup/registry.yaml`, behind TLS from a CA `make e2e.certs` creates under `_output/e2e/certs` |
 | provider-helm, provider-kubernetes, `function-auto-ready` | `manifests/setup/packages.yaml`, at the versions the Makefile pins |
 | A `ClusterProviderConfig` named `e2e` for each provider | `manifests/setup/provider-configs.yaml`. Each provider uses its own service account, bound to `cluster-admin`, which makes the kind cluster the target cluster. |
+| The charts and the recipe catalog | `make e2e.catalog`. It pushes `catalog/charts` with `helm push` and `catalog/recipe` with `oras`, as [the recipe source page][recipe-source] tells an operator to. |
 | function-aicr | `make e2e.function`. It builds the image from the Dockerfile and a package from the image, and installs the package from Crossplane's cache with `packagePullPolicy: Never`. |
 
 The function runs with `manifests/setup/function-runtime.yaml`. That turns
-on debug logging and puts the registry's CA in the trust store, because AICR
-pulls an OCI recipe source over HTTPS only.
+on debug logging and sets the catalog's repository and digest. It also puts
+the registry's CA in the trust store, because AICR pulls an OCI recipe
+source over HTTPS only. provider-helm has the same CA for the charts.
+
+Crossplane runs with `--circuit-breaker-burst=1000`. With the default of 100
+a rollout opens the circuit breaker of its composite resource within
+seconds, and each further step then waits up to 30 seconds.
+
+## The catalog
+
+AICR layers the catalog over the one embedded in the function, so
+`catalog/recipe` replaces the stock overlays that its criteria would
+otherwise also select: `base`, `kind` and `monitoring-hpa`. Only the suite's
+own components remain.
+
+| Component | Composed from |
+|---|---|
+| `e2e-first` | A chart without dependencies. |
+| `e2e-second` | A chart that depends on `e2e-first`, with one manifest file before its release and one after. |
+| `e2e-notes` | A manifest-only component that depends on `e2e-second`. |
+
+The criteria `service: kind` select that recipe. Adding `intent: training`
+selects one that places `e2e-first` in another namespace. `TestEndToEndCatalog`
+at the repository root resolves both and fails when an AICR upgrade adds a
+stock overlay that would join them.
 
 ## Add a feature
 
@@ -60,5 +91,11 @@ A feature is a `Test...` function in this package that hands
 its manifests under `manifests/<area>/<feature>/` and apply them with
 `funcs.ApplyResources`.
 
+The features in `recipe_test.go` share the XRD and the Composition under
+`manifests/recipe/setup` and each creates one composite resource. They run
+one at a time and delete what they created: two composite resources with the
+same recipe would install the same Helm releases.
+
 [crossplane-e2e]: https://github.com/crossplane/crossplane/tree/main/test/e2e
+[recipe-source]: https://jonasz-lasut.github.io/function-aicr/operators/recipe-source.html
 [e2e-framework]: https://github.com/kubernetes-sigs/e2e-framework

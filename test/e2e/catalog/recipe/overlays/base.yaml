@@ -1,0 +1,29 @@
+# Replaces the stock base overlay, which every recipe starts from: a chart
+# without dependencies, a chart that waits for it and has a manifest file on
+# each side of its Release, and a manifest-only component that waits for both.
+kind: RecipeMetadata
+apiVersion: aicr.run/v1beta1
+metadata:
+  name: base
+spec:
+  componentRefs:
+    - name: e2e-first
+      type: Helm
+      source: oci://registry.e2e.svc:5443/charts
+      valuesFile: components/e2e-first/values.yaml
+    - name: e2e-second
+      type: Helm
+      source: oci://registry.e2e.svc:5443/charts
+      valuesFile: components/e2e-second/values.yaml
+      dependencyRefs:
+        - e2e-first
+      preManifestFiles:
+        - components/e2e-second/manifests/before.yaml
+      manifestFiles:
+        - components/e2e-second/manifests/after.yaml
+    - name: e2e-notes
+      type: Helm
+      manifestFiles:
+        - components/e2e-notes/manifests/notes.yaml
+      dependencyRefs:
+        - e2e-second

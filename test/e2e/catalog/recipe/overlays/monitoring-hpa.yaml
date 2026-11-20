@@ -1,0 +1,9 @@
+# Replaces the stock overlay of the same name, whose criteria match every
+# recipe and which adds a stock chart to each.
+kind: RecipeMetadata
+apiVersion: aicr.run/v1beta1
+metadata:
+  name: monitoring-hpa
+spec:
+  criteria:
+    intent: any

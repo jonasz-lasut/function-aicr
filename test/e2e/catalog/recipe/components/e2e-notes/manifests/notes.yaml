@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: e2e-notes
+  namespace: {{ .Release.Namespace }}
+data:
+  note: composed without a chart
