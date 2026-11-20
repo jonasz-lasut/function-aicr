@@ -29,6 +29,25 @@ waits for. The [status summary](../authors/summary.md) lists a component
 under `pendingComponents` while its `Release`, or an `Object` of a
 manifest-only component, is withheld.
 
+## Crossplane's circuit breaker
+
+Crossplane limits how often watch events reconcile one composite resource.
+It allows a burst of 100 events and one more per second after that, counting
+each change to the composite resource and to the resources it composes. The
+resources of a rollout are created together and each reports its status more
+than once, which can use up the burst within seconds. In the end-to-end
+suite a recipe of three components did so three seconds after its composite
+resource was created.
+
+Crossplane then sets the condition `Responsive` to `False` with the reason
+`WatchCircuitOpen`. For the next five minutes it lets one event through
+every 30 seconds. The rollout continues, but each step waits for the next of
+those reconciles, and the status summary lags by as much.
+
+If that's too slow, raise `--circuit-breaker-burst` in Crossplane's
+arguments. The suite's recipe was ready after 64 seconds with the default
+and after 5 seconds with a burst of 1000.
+
 ## Live resources
 
 A resource that has already been observed is never withheld. The gate must

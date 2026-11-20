@@ -86,3 +86,9 @@ component. A custom resource then remains next to its operator.
 To move a component yourself, set
 `componentOverrides.<component>.namespace`. The function uses that namespace
 whatever it observes.
+
+provider-helm then installs the chart in the new namespace and leaves the
+release in the old one in place. Uninstall the old release with Helm. A
+chart with cluster-scoped resources needs that first, because Helm refuses
+the second install with `invalid ownership metadata` while the old release
+owns them.

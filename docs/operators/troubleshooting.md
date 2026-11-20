@@ -89,7 +89,9 @@ The override is ignored. The component is misspelled, skipped, left out by
 
 The recipe now places the component in another namespace, and the function
 doesn't move a live `Release`. Nothing is wrong. To move the component,
-set the override the message names.
+set the override the message names, and read
+[what a move leaves behind](../authors/components.md#a-deployed-component-keeps-its-namespace)
+first.
 
 ### `upgrading "…" from … to … is rated … by AICR`
 
@@ -110,6 +112,13 @@ out by `componentClasses`, so the function doesn't wire any of it.
 The [gate](rollout-order.md) is withholding the rest. Read the Normal results
 (`delaying X until dependency Y is ready`) or `pendingComponents` in the
 status summary.
+
+### The rollout advances one step every 30 seconds
+
+The composite resource has the condition `Responsive` at `False` with the
+reason `WatchCircuitOpen`. Crossplane's
+[circuit breaker](rollout-order.md#crossplanes-circuit-breaker) is open, and
+the rollout continues at its pace.
 
 ### `delaying X until dependency Y is ready` never goes away
 
