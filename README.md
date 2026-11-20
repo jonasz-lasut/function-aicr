@@ -135,6 +135,10 @@ The rules, all AICR's own:
 - **Fail fast, no fallback.** A pull or validation failure exits the function
   rather than silently serving embedded data; the pod's restart backoff and
   logs make the failure visible.
+- **Authored for the embedded AICR release.** The artifact's `registry.yaml`
+  must declare the `apiVersion` that release expects. AICR v1.0.0 retired the
+  alpha versions, so an artifact written for an older release is refused at
+  startup.
 - **Registry access.** Credentials are read from the Docker config
   (`$DOCKER_CONFIG/config.json` — mount a `dockerconfigjson` Secret and set
   `DOCKER_CONFIG`), connections are HTTPS with the image's CA bundle (set
@@ -281,7 +285,7 @@ recipe to that path on the desired composite resource:
 status:
   aicr:
     recipeName: h100-kind-training
-    recipeVersion: v0.20.0
+    recipeVersion: v1.3.0
     componentCount: 3
     deployedComponents:
     - name: cert-manager

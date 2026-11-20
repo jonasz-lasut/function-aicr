@@ -420,7 +420,7 @@ Y is not reaching `Ready` in the target cluster (check the `Release`/`Object` in
 
 ### "cannot pull the OCI recipe source …" at startup
 
-The function exits (and the pod crashloops) when the `--recipe-oci-*` source cannot be pulled or validated. `--recipe-oci-digest` must be the artifact's immutable `sha256:` manifest digest, not a tag. An auth error means the Docker config (`DOCKER_CONFIG`) lacks credentials for the registry; a TLS error means the registry's CA is not in the trust store (`SSL_CERT_FILE`); "invalid materialized OCI recipe catalog" means the artifact is not a recipe tree rooted at `registry.yaml`. There is deliberately no fallback to the embedded catalog.
+The function exits (and the pod crashloops) when the `--recipe-oci-*` source cannot be pulled or validated. `--recipe-oci-digest` must be the artifact's immutable `sha256:` manifest digest, not a tag. An auth error means the Docker config (`DOCKER_CONFIG`) lacks credentials for the registry; a TLS error means the registry's CA is not in the trust store (`SSL_CERT_FILE`); "invalid materialized OCI recipe catalog" means the artifact is not a recipe tree rooted at `registry.yaml`; an error naming the `apiVersion` of the external `registry.yaml` means the artifact was authored for an AICR older than v1.0.0, which retired the alpha catalog versions. There is deliberately no fallback to the embedded catalog.
 
 ### "this recipe ships torch-distributed-tcpxo and requires configuration.gke.tcpxoInterfaces"
 
