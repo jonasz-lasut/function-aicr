@@ -13,30 +13,83 @@
 # limitations under the License.
 
 # The end-to-end suite (test/e2e, the Makefile): a kind cluster with
-# Crossplane, the providers, a registry that holds the suite's own charts and
-# recipe catalog, and function-aicr built from the tree. It deploys nothing
-# from outside the cluster, so it takes a few minutes and runs on every pull
+# Crossplane, the providers and function-aicr built from the tree. It has two
+# profiles, each on a cluster of its own.
+#
+# catalog deploys the suite's own small catalog from a registry in the
+# cluster. It pulls nothing else, takes a few minutes, and runs on every pull
 # request and on main.
+#
+# kwok deploys a stock recipe, with its real charts, onto nodes that KWOK
+# simulates. It pulls every chart of the recipe from its upstream registry, so
+# it runs on request: on a pull request that has the `e2e:kwok` label, or from
+# the Actions tab.
 name: E2E
 
 on:
-  pull_request: {}
+  pull_request:
+    types: [opened, reopened, synchronize, labeled]
   push:
     branches:
       - main
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      kwok:
+        description: Also run the kwok profile
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
-concurrency:
-  group: e2e-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 jobs:
-  e2e:
+  # The profiles this event runs. Any label fires `labeled`: one that is not
+  # e2e:kwok selects nothing, and e2e:kwok selects kwok alone, so adding a
+  # label never repeats the catalog run the commit already has.
+  profiles:
     runs-on: ubuntu-26.04
-    timeout-minutes: 45
+    timeout-minutes: 5
+    outputs:
+      profiles: ${{ steps.select.outputs.profiles }}
+    steps:
+      - name: Select the Profiles
+        id: select
+        env:
+          EVENT: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          LABEL: ${{ github.event.label.name }}
+          LABELLED_KWOK: ${{ contains(github.event.pull_request.labels.*.name, 'e2e:kwok') }}
+          DISPATCHED_KWOK: ${{ inputs.kwok }}
+        run: |
+          profiles=()
+          if [[ "$EVENT" != pull_request ]]; then
+            profiles+=(catalog)
+            if [[ "$DISPATCHED_KWOK" == true ]]; then profiles+=(kwok); fi
+          else
+            if [[ "$ACTION" != labeled ]]; then profiles+=(catalog); fi
+            if [[ "$LABELLED_KWOK" == true && ( "$ACTION" != labeled || "$LABEL" == "e2e:kwok" ) ]]; then
+              profiles+=(kwok)
+            fi
+          fi
+          echo "profiles=$(jq -cn '$ARGS.positional' --args "${profiles[@]}")" >> "$GITHUB_OUTPUT"
+
+  e2e:
+    name: e2e (${{ matrix.profile }})
+    needs: profiles
+    if: needs.profiles.outputs.profiles != '[]'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: ${{ fromJSON(needs.profiles.outputs.profiles) }}
+    # One run per profile and branch, the newest cancelling the one before it
+    # on a pull request.
+    concurrency:
+      group: e2e-${{ matrix.profile }}-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    env:
+      E2E_PROFILE: ${{ matrix.profile }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -68,6 +121,6 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: controlplane-dump
+          name: controlplane-dump-${{ matrix.profile }}
           path: _output/controlplane-dump
           if-no-files-found: ignore

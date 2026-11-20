@@ -1,0 +1,81 @@
+# function-aicr with what a stock recipe needs to come up on simulated nodes.
+# The placement and the chart values are the ones AICR's own KWOK lane passes
+# to `aicr bundle` (kwok/scripts/validate-scheduling.sh in the aicr module).
+# Nothing serves a webhook or backs a volume on a simulated node, so what
+# would wait for either is turned off.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: stacks.e2e.aicr.example.org
+spec:
+  compositeTypeRef:
+    apiVersion: e2e.aicr.example.org/v1alpha1
+    kind: Stack
+  mode: Pipeline
+  pipeline:
+  - step: aicr
+    functionRef:
+      name: function-aicr
+    input:
+      apiVersion: aicr.fn.crossplane.io/v1beta1
+      kind: Input
+      overlayFrom:
+        fieldPath: spec.aicr
+      providerConfigRef:
+        kind: ClusterProviderConfig
+        name: e2e
+      target:
+        fieldPath: status.aicr
+      nodeScheduling:
+        system:
+          nodeSelector:
+            aicr.run/node-type: system
+          tolerations:
+          - key: kwok.x-k8s.io/node
+            operator: Equal
+            value: fake
+            effect: NoSchedule
+        accelerated:
+          nodeSelector:
+            aicr.run/node-type: accelerated
+          tolerations:
+          - key: nvidia.com/gpu
+            operator: Equal
+            value: present
+            effect: NoSchedule
+          - key: kwok.x-k8s.io/node
+            operator: Equal
+            value: fake
+            effect: NoSchedule
+      skipComponents:
+      # Its custom resource needs the operator's CRDs and admission webhook.
+      - name: nodewright-customizations
+      # Its charts create cert-manager certificates and custom resources of
+      # an operator whose webhook also guards their deletion. With the
+      # webhooks on simulated nodes it could be neither installed nor
+      # removed. AICR's own lane relaxes cert-manager's validation for its
+      # namespace and uninstalls it without hooks.
+      - name: nktp
+      componentOverrides:
+        cert-manager:
+          values:
+            startupapicheck:
+              enabled: false
+        kube-prometheus-stack:
+          values:
+            defaultRules:
+              create: false
+            alertmanager:
+              enabled: false
+            # The cloud recipes claim a volume for Prometheus, which no
+            # simulated node can back.
+            prometheus:
+              prometheusSpec:
+                storageSpec: null
+        nodewright-operator:
+          values:
+            webhook:
+              enable: false
+  - step: auto-ready
+    functionRef:
+      name: function-auto-ready

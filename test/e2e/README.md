@@ -82,6 +82,41 @@ selects one that places `e2e-first` in another namespace. `TestEndToEndCatalog`
 at the repository root resolves both and fails when an AICR upgrade adds a
 stock overlay that would join them.
 
+## The KWOK profile
+
+The suite's own catalog can't show whether a stock recipe deploys. The
+`kwok` profile does that on a cluster of its own, the way
+[AICR's KWOK lane][aicr-kwok] does. [KWOK][kwok] adds nodes that have no
+kubelet and reports a pod scheduled on one as running, without starting a
+container.
+
+```shell
+make e2e.up E2E_PROFILE=kwok
+make e2e.test E2E_PROFILE=kwok
+make e2e.down
+```
+
+`make e2e.kwok` applies the KWOK release at `KWOK_VERSION` and the nodes in
+`manifests/kwok/nodes.yaml`. They're two system and four accelerated nodes
+with the labels and capacity of EKS `h100` instances, which is what AICR's
+lane creates for the recipe. The function runs without a recipe source and serves the
+embedded catalog.
+
+`TestStockRecipeOnSimulatedNodes` deploys the EKS `h100` training recipe with
+its real charts. It proves that the charts are pulled from their registries,
+that the API server accepts what they render, that `nodeScheduling` gives
+every pod a node, and that each release becomes ready in AICR's order. No
+operator reconciles anything, because no container starts.
+
+The Composition under `manifests/kwok/setup` has the node placement and the
+chart values AICR's lane passes to `aicr bundle`. They turn off what waits
+for a webhook or a volume, which a simulated node can't serve. It skips
+`nodewright-customizations`, as AICR's lane does, and `nktp`, whose
+operator's webhook also guards the deletion of its resources.
+
+Features of this profile have the `kwok` test suite label, and the default
+profile doesn't run them.
+
 ## Add a feature
 
 A feature is a `Test...` function in this package that hands
@@ -97,5 +132,7 @@ one at a time and delete what they created: two composite resources with the
 same recipe would install the same Helm releases.
 
 [crossplane-e2e]: https://github.com/crossplane/crossplane/tree/main/test/e2e
+[aicr-kwok]: https://github.com/NVIDIA/aicr/tree/main/kwok
+[kwok]: https://kwok.sigs.k8s.io
 [recipe-source]: https://jonasz-lasut.github.io/function-aicr/operators/recipe-source.html
 [e2e-framework]: https://github.com/kubernetes-sigs/e2e-framework

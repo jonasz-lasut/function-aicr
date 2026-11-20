@@ -41,6 +41,12 @@ func TestMain(m *testing.M) {
 			config.LabelTestSuite: []string{config.TestSuiteDefault},
 		}),
 	)
+	environment.AddTestSuite(TestSuiteKWOK,
+		config.WithoutBaseDefaultTestSuite(),
+		config.WithLabelsToSelect(features.Labels{
+			config.LabelTestSuite: []string{TestSuiteKWOK},
+		}),
+	)
 
 	var (
 		setup  []env.Func

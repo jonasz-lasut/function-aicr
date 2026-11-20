@@ -87,8 +87,20 @@ The suite follows the one in `crossplane/crossplane`. Features are built with
 manifests in a directory under `test/e2e/manifests/`. It's a Go module of its
 own, so `go test ./...` at the root doesn't build it.
 
-CI runs it on every pull request. [`test/e2e/README.md`][e2e-readme]
-describes the cluster, the catalog and how to add a feature.
+CI runs it on every pull request.
+
+A second profile deploys a stock recipe with its real charts onto nodes that
+KWOK simulates, the way AICR's own KWOK lane does. It pulls every chart from
+its upstream registry, so CI runs it on request: on a pull request with the
+`e2e:kwok` label, or from the Actions tab.
+
+```shell
+make e2e.up E2E_PROFILE=kwok
+make e2e.test E2E_PROFILE=kwok
+```
+
+[`test/e2e/README.md`][e2e-readme] describes the clusters, the catalog and
+how to add a feature.
 
 ## Conventions
 

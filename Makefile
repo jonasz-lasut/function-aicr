@@ -43,6 +43,8 @@ REGISTRY_VERSION ?= 3.0.0
 # The release without its tag's `v`, as the archive is named.
 # renovate: datasource=github-releases depName=oras-project/oras extractVersion=^v(?<version>.*)$
 ORAS_VERSION ?= 1.4.0
+# renovate: datasource=github-releases depName=kubernetes-sigs/kwok
+KWOK_VERSION ?= v0.8.0
 
 # Crossplane's flags. A composite resource whose composed resources all
 # report their status within a few seconds spends the default burst of its
@@ -72,6 +74,15 @@ $(ORAS):
 
 # The end-to-end suite
 #
+# The suite has two profiles, each on a cluster of its own (E2E_PROFILE):
+#
+#   catalog  the default. The function serves the suite's own small catalog
+#            from the registry in the cluster, so a run is hermetic and takes
+#            minutes.
+#   kwok     the function serves the embedded catalog, and a stock recipe is
+#            deployed onto nodes that KWOK simulates, as AICR's own KWOK lane
+#            does.
+#
 # make e2e           up, the suite, down (the library's e2e pipeline:
 #                    e2e.init, e2e.run, e2e.done)
 # make e2e.up        kind + Crossplane (controlplane.up, then e2e.crossplane
@@ -79,13 +90,15 @@ $(ORAS):
 #                    suite's setup (e2e.setup: the registry behind TLS from a
 #                    CA made here, provider-helm and provider-kubernetes with
 #                    a ClusterProviderConfig for the cluster itself,
-#                    function-auto-ready), the suite's catalog (e2e.catalog),
-#                    then function-aicr's image and package installed from
-#                    this tree (e2e.function)
+#                    function-auto-ready), the profile's own setup
+#                    (e2e.catalog or e2e.kwok), then function-aicr's image
+#                    and package installed from this tree (e2e.function)
 # make e2e.catalog   publish the charts and the recipe catalog under
 #                    test/e2e/catalog to the registry and point function-aicr
 #                    at the catalog's digest: the inner loop after a change
 #                    to the catalog
+# make e2e.kwok      install KWOK, create the simulated nodes and give
+#                    function-aicr a runtime config without a recipe source
 # make e2e.function  rebuild the image and the package and reinstall them:
 #                    the inner loop after a code change
 # make e2e.test      the suite under test/e2e against the cluster
@@ -107,12 +120,21 @@ E2E_CATALOG_OUT := $(E2E_DIR)/catalog
 # The recipe catalog's repository; the function is given its manifest digest.
 E2E_RECIPE_REPOSITORY := recipes/e2e
 FUNCTION_RUNTIME_CONFIG := function-aicr-e2e
+E2E_PROFILE ?= catalog
+ifeq (,$(filter $(E2E_PROFILE),catalog kwok))
+$(error E2E_PROFILE is $(E2E_PROFILE): it must be catalog or kwok)
+endif
+KWOK_RELEASE := https://github.com/kubernetes-sigs/kwok/releases/download/$(KWOK_VERSION)
+E2E_KWOK_MANIFESTS := test/e2e/manifests/kwok
+# The features to run: crossplane's e2e environment selects them by suite.
+E2E_TEST_SUITE_catalog := base
+E2E_TEST_SUITE_kwok := kwok
 # The flags that point crossplane's e2e environment at a cluster it does not
 # own: the suite neither creates nor destroys it and installs no Crossplane.
 E2E_TEST_FLAGS ?= -v -count=1 -timeout=30m
-E2E_ENV_FLAGS := --kind-cluster-name=$(KIND_CLUSTER_NAME) --create-kind-cluster=false --destroy-kind-cluster=false --preinstall-crossplane=false --load-images-kind-cluster=false
+E2E_ENV_FLAGS := --kind-cluster-name=$(KIND_CLUSTER_NAME) --create-kind-cluster=false --destroy-kind-cluster=false --preinstall-crossplane=false --load-images-kind-cluster=false --test-suite=$(E2E_TEST_SUITE_$(E2E_PROFILE))
 
-.PHONY: e2e.up e2e.crossplane e2e.setup e2e.certs e2e.catalog e2e.image e2e.function e2e.test e2e.down e2e.dump xpkg.build.function-aicr
+.PHONY: e2e.up e2e.crossplane e2e.setup e2e.certs e2e.catalog e2e.kwok e2e.image e2e.function e2e.test e2e.down e2e.dump xpkg.build.function-aicr
 
 e2e.init: e2e.up
 e2e.run: e2e.test
@@ -120,7 +142,7 @@ e2e.done: e2e.down
 
 e2e.up: controlplane.up e2e.crossplane
 	@$(MAKE) e2e.setup
-	@$(MAKE) e2e.catalog
+	@$(MAKE) e2e.$(E2E_PROFILE)
 	@$(MAKE) e2e.function
 	@$(OK) the end-to-end cluster is up: make e2e.test runs the suite
 
@@ -189,6 +211,24 @@ e2e.catalog: $(KUBECTL) $(HELM) $(ORAS) e2e.certs
 	@sed -e 's|RECIPE_OCI_REPOSITORY|$(E2E_REGISTRY)/$(E2E_RECIPE_REPOSITORY)|' -e "s|RECIPE_OCI_DIGEST|$$(cat $(E2E_CATALOG_OUT)/recipe.digest)|" \
 		$(E2E_MANIFESTS)/function-runtime.yaml | $(KUBECTL) apply -f - || $(FAIL)
 	@$(OK) publishing the charts and the recipe catalog: $$(cat $(E2E_CATALOG_OUT)/recipe.digest)
+
+# What AICR's `make kwok-cluster` and `make kwok-nodes` do to a kind cluster:
+# the KWOK controller with the stages that take a pod to Running without a
+# kubelet, from the KWOK release, and the simulated nodes. The real node is
+# labelled as AICR's lane labels it, which keeps the EBS CSI node plugin off
+# it: there the plugin would really start, and fail without the EC2 metadata
+# service. The function gets its runtime config without a recipe source, so
+# it serves the embedded catalog.
+e2e.kwok: $(KUBECTL)
+	@$(INFO) installing KWOK $(KWOK_VERSION) and the simulated nodes
+	@$(KUBECTL) apply -f $(KWOK_RELEASE)/kwok.yaml >/dev/null || $(FAIL)
+	@$(KUBECTL) apply -f $(KWOK_RELEASE)/stage-fast.yaml >/dev/null || $(FAIL)
+	@$(KUBECTL) -n kube-system wait --for=condition=Available --timeout=180s deployment/kwok-controller || $(FAIL)
+	@$(KUBECTL) apply -f $(E2E_KWOK_MANIFESTS)/nodes.yaml >/dev/null || $(FAIL)
+	@$(KUBECTL) wait --for=condition=Ready --timeout=60s nodes --selector=type=kwok || $(FAIL)
+	@$(KUBECTL) label node --selector='type!=kwok' eks.amazonaws.com/compute-type=hybrid --overwrite || $(FAIL)
+	@sed -e '/recipe-oci/d' $(E2E_MANIFESTS)/function-runtime.yaml | $(KUBECTL) apply -f - || $(FAIL)
+	@$(OK) installing KWOK $(KWOK_VERSION) and the simulated nodes
 
 # The runtime image from this tree, built for the host's architecture.
 e2e.image:
