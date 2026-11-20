@@ -1,9 +1,7 @@
 apiVersion: aicr.fn.crossplane.io/v1beta1
 kind: Input
-criteriaFrom:
-  accelerator: spec.gpuType
-  service: spec.cloud
-  intent: spec.purpose
+overlayFrom:
+  fieldPath: spec.aicr
 providerConfigRef:
   kind: ClusterProviderConfig
   name: gpu-cluster
@@ -15,6 +13,8 @@ componentOverrides:
       driver:
         version: "999"
 skipComponents:
+- name: dra-node-labeler
+- name: nktp
 - name: nfd
 - name: network-operator
 - name: nodewright-operator

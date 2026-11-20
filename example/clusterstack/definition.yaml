@@ -19,20 +19,29 @@ spec:
           spec:
             type: object
             required:
-            - accelerator
-            - service
-            - intent
+            - aicr
             properties:
-              accelerator:
-                type: string
-              service:
-                type: string
-              intent:
-                type: string
-              os:
-                type: string
-              platform:
-                type: string
+              aicr:
+                description: >-
+                  Merged over the function-aicr Input by its overlayFrom. The
+                  fields declared here are the ones a ClusterStack may set.
+                type: object
+                required:
+                - criteria
+                properties:
+                  criteria:
+                    type: object
+                    properties:
+                      accelerator:
+                        type: string
+                      service:
+                        type: string
+                      intent:
+                        type: string
+                      os:
+                        type: string
+                      platform:
+                        type: string
           status:
             type: object
             properties:
@@ -45,6 +54,13 @@ spec:
                     type: string
                   recipeSource:
                     type: string
+                  profile:
+                    type: string
+                  appliedOverlays:
+                    type: array
+                    items:
+                      type: string
+                    x-kubernetes-list-type: atomic
                   componentCount:
                     type: integer
                   deployedComponents:
@@ -55,6 +71,24 @@ spec:
                       - name
                       properties:
                         name:
+                          type: string
+                        version:
+                          type: string
+                        namespace:
+                          type: string
+                    x-kubernetes-list-type: map
+                    x-kubernetes-list-map-keys:
+                    - name
+                  pendingComponents:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                      - name
+                      properties:
+                        name:
+                          type: string
+                        waitingFor:
                           type: string
                     x-kubernetes-list-type: map
                     x-kubernetes-list-map-keys:

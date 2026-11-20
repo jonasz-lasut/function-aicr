@@ -33,19 +33,24 @@ criteria:
   intent: training
   os: ubuntu
   platform: kubeflow
-criteriaFrom:
-  accelerator: spec.accelerator
-  service: spec.service
-  intent: spec.intent
-  os: spec.os
-  platform: spec.platform
+overlayFrom:
+  fieldPath: spec.aicr
+profile:
+  gpuStack: dra
+configuration:
+  gke:
+    tcpxoInterfaces:
+    - interfaceName: eth1
+      network: gpu-nic-0
+  runtimeInventory:
+    mode: enabled
 providerConfigRef:
   kind: ClusterProviderConfig
   name: gpu-cluster
-providerConfigRefFrom:
-  kind: spec.providerConfigKind
-  name: spec.providerConfigName
+draEviction: true
 skipDeploymentOrder: true
+componentClasses:
+- core
 skipComponents:
 - name: cert-manager
 componentOverrides:
@@ -67,22 +72,19 @@ target:
 					OS:          "ubuntu",
 					Platform:    "kubeflow",
 				},
-				CriteriaFrom: &CriteriaFrom{
-					Accelerator: new("spec.accelerator"),
-					Service:     new("spec.service"),
-					Intent:      new("spec.intent"),
-					OS:          new("spec.os"),
-					Platform:    new("spec.platform"),
+				OverlayFrom: &OverlayFrom{FieldPath: "spec.aicr"},
+				Profile:     map[string]string{"gpuStack": "dra"},
+				Configuration: &Configuration{
+					GKE:              &GKEConfiguration{TCPXOInterfaces: []NetworkInterfaceMapping{{InterfaceName: "eth1", Network: "gpu-nic-0"}}},
+					RuntimeInventory: &RuntimeInventoryConfiguration{Mode: "enabled"},
 				},
 				ProviderConfigRef: &ProviderConfigRef{
 					Kind: "ClusterProviderConfig",
 					Name: "gpu-cluster",
 				},
-				ProviderConfigRefFrom: &ProviderConfigRefFrom{
-					Kind: new("spec.providerConfigKind"),
-					Name: new("spec.providerConfigName"),
-				},
+				DRAEviction:         true,
 				SkipDeploymentOrder: true,
+				ComponentClasses:    []string{"core"},
 				SkipComponents:      []ComponentRef{{Name: "cert-manager"}},
 				ComponentOverrides: map[string]ComponentOverride{
 					"gpu-operator": {
@@ -95,7 +97,7 @@ target:
 			}},
 		},
 		"Minimal": {
-			reason: "Nothing is structurally required; providerConfigRef.name (or a providerConfigRefFrom.name path) is enforced at run time.",
+			reason: "Nothing is structurally required; providerConfigRef.name, from the Input or its overlay, is enforced at run time.",
 			args: args{yaml: `
 apiVersion: aicr.fn.crossplane.io/v1beta1
 kind: Input

@@ -3,8 +3,8 @@ package compose
 import (
 	"strings"
 
-	"github.com/NVIDIA/aicr/pkg/manifest"
-	"github.com/NVIDIA/aicr/pkg/recipe"
+	"aicr.run/pkg/manifest"
+	"aicr.run/pkg/recipe"
 )
 
 // defaultChartVersion is what AICR's deployers use for .Chart.Version when a

@@ -7,7 +7,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 
-	"github.com/NVIDIA/aicr/pkg/oci"
+	"aicr.run/pkg/oci"
 
 	"github.com/crossplane/function-sdk-go/logging"
 )

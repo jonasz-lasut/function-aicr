@@ -10,9 +10,9 @@ import (
 
 	"github.com/alecthomas/kong"
 
-	"github.com/NVIDIA/aicr/pkg/oci"
-	"github.com/NVIDIA/aicr/pkg/recipe"
-	"github.com/NVIDIA/aicr/pkg/recipe/ocisource"
+	"aicr.run/pkg/oci"
+	"aicr.run/pkg/recipe"
+	"aicr.run/pkg/recipe/ocisource"
 
 	"github.com/crossplane/function-sdk-go"
 	"github.com/crossplane/function-sdk-go/errors"
@@ -62,7 +62,7 @@ func (c *CLI) Run() error {
 }
 
 // newDataProvider returns the recipe data this function serves: the catalog
-// embedded in the github.com/NVIDIA/aicr module or — when an OCI source is
+// embedded in the aicr.run module or — when an OCI source is
 // configured — that catalog with the digest-pinned recipe artifact layered
 // over it, pulled once at startup so no reconcile ever waits on a registry.
 // A pull failure is returned rather than fallen back from: silently serving
@@ -107,15 +107,15 @@ func ociPullOptions(repository, digest string) (oci.RecipePullOptions, string, e
 }
 
 // embeddedDataProvider returns the AICR recipe data embedded in this
-// function's image, pinned by the github.com/NVIDIA/aicr module version.
+// function's image, pinned by the aicr.run module version.
 func embeddedDataProvider() *recipe.EmbeddedDataProvider {
 	return recipe.NewEmbeddedDataProvider(recipe.GetEmbeddedFS(), ".")
 }
 
 // aicrModule is the module whose version pins the embedded recipe data.
-const aicrModule = "github.com/NVIDIA/aicr"
+const aicrModule = "aicr.run"
 
-// aicrVersion returns the github.com/NVIDIA/aicr module version this binary
+// aicrVersion returns the aicr.run module version this binary
 // was built with, read from the build info Go embeds in it. It is what the
 // resolved-recipe summary reports as recipeVersion.
 func aicrVersion() string {

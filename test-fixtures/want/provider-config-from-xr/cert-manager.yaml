@@ -24,7 +24,7 @@ spec:
       fullnameOverride: cert-manager
       prometheus:
         servicemonitor:
-          enabled: false
+          enabled: true
       resources:
         limits:
           cpu: 50m

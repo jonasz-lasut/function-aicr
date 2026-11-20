@@ -10,7 +10,7 @@ Function-AICR is a **Crossplane Composition Function** that deploys an NVIDIA AI
 
 The main goal is to make an AICR recipe a **continuously reconciled Crossplane API** rather than a one-shot bundle, while staying **XR-agnostic** — the function never knows the composite resource's kind. This provides:
 
-- **Criteria from the XR**: `criteriaFrom` / `providerConfigRefFrom` field paths let one Composition serve every cluster, each XR naming its own recipe and target cluster
+- **An overlay from the XR**: `overlayFrom.fieldPath` merges one object on the XR over the static `Input`, so one Composition serves every cluster, each XR naming its own recipe and target cluster
 - **Schema-validated output**: every composed resource is checked against the provider CRD schema Crossplane resolves for it (required-schemas protocol) before it is emitted
 - **Ordered rollout**: components are withheld until what AICR orders before them is observed `Ready`
 - **Manifest files as `Object`s**: AICR's Helm-templated manifest files are rendered with AICR's own renderer and wrapped in provider-kubernetes `Object`s
@@ -19,14 +19,14 @@ The main goal is to make an AICR recipe a **continuously reconciled Crossplane A
 
 ### Relationship to AICR
 
-AICR (`github.com/NVIDIA/aicr`) is a CLI, API server and Go library that resolves recipes and renders them into Helm, Argo CD, Flux or Helmfile bundles. Function-AICR embeds AICR's recipe engine (`pkg/recipe`) and catalog and adapts the deployment to Crossplane:
+AICR (`github.com/NVIDIA/aicr`, Go module `aicr.run`) is a CLI, API server and Go library that resolves recipes and renders them into Helm, Argo CD, Flux or Helmfile bundles. Function-AICR embeds AICR's recipe engine (`pkg/recipe`) and catalog and adapts the deployment to Crossplane:
 
 | AICR CLI / bundler | Function-AICR |
 |--------------------|---------------|
-| Criteria on the command line | Criteria in the function `Input`, or on the observed XR via field paths |
+| Criteria on the command line | Criteria in the function `Input`, or in the overlay read from the observed XR |
 | Renders a bundle for an external deployer to apply once | Returns desired `Release`s and `Object`s to Crossplane, which reconciles them continuously |
 | Deployment order left to the deployer's tooling (Argo waves, Helmfile needs, ...) | Enforced by a gate that reads the providers' observed `Ready` conditions |
-| Reads recipe data from its embedded FS or an OCI source | Reads the embedded FS of the pinned `github.com/NVIDIA/aicr` module version; the `--recipe-oci-*` flags overlay it with a digest-pinned OCI recipe artifact pulled once at startup |
+| Reads recipe data from its embedded FS or an OCI source | Reads the embedded FS of the pinned `aicr.run` module version; the `--recipe-oci-*` flags overlay it with a digest-pinned OCI recipe artifact pulled once at startup |
 
 The pinned module version **is** the recipe catalog version. Bumping it changes what the function deploys (see [Bumping the AICR module](#bumping-the-aicr-module)).
 
@@ -40,26 +40,32 @@ Crossplane RunFunctionRequest
 ┌──────────────────────────────────────────────────────────────────────┐
 │ fn.go: RunFunction()                                                 │
 │                                                                      │
-│  1. Parse Input; validateTarget (fieldPath must be status[.…]);      │
-│     parseOverrides (values must be a JSON object)                    │
-│  2. Pave the observed XR; resolve.ProviderConfigRef and              │
-│     resolve.Criteria from Input + XR field paths; Criteria.Validate  │
+│  1. resolve.Input: static Input + the overlay at overlayFrom on      │
+│     the observed XR, decoded strictly; validateTarget (fieldPath     │
+│     must be status[.…]); parseOverrides (values: a JSON object)      │
+│  2. resolve.ProviderConfigRef and resolve.Criteria from the          │
+│     resolved Input; Criteria.Validate                                │
 │  3. Fatal unless Crossplane advertises CAPABILITY_REQUIRED_SCHEMAS   │
-│  4. recipe.NewBuilder(...).BuildFromCriteria → RecipeResult          │
+│  4. resolve.Profile, resolve.BuildOptions (configuration);           │
+│     recipe.NewBuilder(...).BuildFromCriteriaWithProfile → result     │
 │  5. managedComponents: enabled, not skipped, Helm-typed refs         │
 │     (Warnings for skip/override names that match nothing)            │
-│  6. needs(managed) → RequireSchema("release") / ("object") as needed │
+│  6. resolveValues: effective values per component                    │
+│     stack.wireDRAEviction (draEviction): the three-chart contract    │
+│     stack.keepNamespaces: a deployed Release keeps its namespace     │
+│  7. stack.renderObjects: per component, per wave (pre/post):         │
+│       manifest file → RenderManifest → SplitManifests →              │
+│       ManifestObjectName → NewObject → rendered                      │
+│  8. stack.needs → RequireSchema("release") / ("object") as needed    │
 │     composedKind.validator: not yet resolved → return with no        │
 │     resources; resolved to nil → Fatal "is provider-… installed?"    │
-│  7. resolveValues: effective values per component                    │
-│  8. stack.composeReleases: NewRelease → Validate → desired           │
-│     stack.composeObjects: per component, per wave (pre/post):        │
-│       manifest file → RenderManifest → SplitManifests →              │
-│       ManifestObjectName → NewObject → Validate → desired            │
-│  9. stack.gate (unless skipDeploymentOrder): withhold from desired   │
+│  9. stack.composeReleases: NewRelease → Validate → desired           │
+│     stack.composeObjects: rendered → Validate → desired              │
+│ 10. stack.gate (unless skipDeploymentOrder): withhold from desired   │
 │     what is not yet allowed by observed readiness                    │
-│ 10. SetDesiredComposedResources; if target: setStatus(summary)       │
-│ 11. ConditionTrue FunctionSuccess                                    │
+│     stack.warnUnsafeUpgrades: version changes AICR rates not safe    │
+│ 11. SetDesiredComposedResources; if target: setStatus(summary)       │
+│ 12. ConditionTrue FunctionSuccess                                    │
 └──────────────────────────────────────────────────────────────────────┘
     ↓
 Crossplane RunFunctionResponse (desired resources + requirements + XR status)
@@ -68,26 +74,29 @@ Crossplane RunFunctionResponse (desired resources + requirements + XR status)
 ### Key Components
 
 ```
-fn.go                             RunFunction, the stack type (compose, gate, summary),
+fn.go                             RunFunction, the stack type (render, compose, gate, summary),
                                   managedComponents, parseOverrides, setStatus, recipeName
 main.go                           kong CLI, DataProvider (embedded, or the OCI overlay from
                                   the --recipe-oci-* flags), aicrVersion/moduleVersion
     ↓
-input/v1beta1/input.go            Input, Criteria, CriteriaFrom, ProviderConfigRef(From),
+input/v1beta1/input.go            Input, OverlayFrom, Criteria, ProviderConfigRef,
                                   ComponentRef, ComponentOverride, Target
     ↓
-internal/resolve/                 Input + observed XR → validated values
-    ├── criteria.go               Criteria(): the four field-path rules, ≥1 dimension
-    └── providerconfig.go         ProviderConfigRef(): same rules, kind enum, name required
+internal/resolve/                 static Input + observed XR → the resolved Input
+    ├── input.go                  Input(): static Input + overlay, strict decoding
+    ├── criteria.go               Criteria(): ≥1 dimension
+    ├── selection.go              Profile(): one name=value; BuildOptions(): configuration
+    └── providerconfig.go         ProviderConfigRef(): kind enum, name required
     ↓
 internal/compose/                 Builds the composed resources (map[string]any)
     ├── release.go                NewRelease, Override, effective(), SplitChart, MergeValues
     ├── manifest.go               RenderManifest via aicr/pkg/manifest.Render
+    ├── draeviction.go            WireDRAEviction: a copy of the bundler's eviction wiring
     └── object.go                 SplitManifests, ManifestObjectName, NewObject
     ↓
 internal/schema/                  Validator: compile a required schema once, Validate many
     ↓
-github.com/NVIDIA/aicr/pkg/recipe Builder, DataProvider, RecipeResult, ComponentRef,
+aicr.run/pkg/recipe               Builder, DataProvider, RecipeResult, ComponentRef,
                                   ResolveLeaves (tests), GetManifestContentWithContext
 ```
 
@@ -104,7 +113,7 @@ function-aicr/
 │   └── v1beta1/             # Input API definitions (+ zz_generated.deepcopy.go)
 │
 ├── internal/
-│   ├── resolve/             # Criteria and provider-config resolution from Input + XR
+│   ├── resolve/             # Input overlay from the XR, criteria and provider config
 │   ├── compose/             # Release/Object builders, manifest rendering, value merging
 │   └── schema/              # OpenAPI v3 validation of composed resources
 │
@@ -137,11 +146,14 @@ The function receives an `Input` (`aicr.fn.crossplane.io/v1beta1`) — a KRM-lik
 
 ```go
 type Input struct {
-    Criteria              *Criteria                    // literal accelerator/service/intent/os/platform
-    CriteriaFrom          *CriteriaFrom                // field paths on the XR, win over the literals
+    OverlayFrom           *OverlayFrom                 // fieldPath of an Input-shaped object on the XR, merged over the rest
+    Criteria              *Criteria                    // accelerator/service/intent/os/platform
+    Profile               map[string]string            // one recipe variant, {gpuStack: dra}
+    Configuration         *Configuration               // gke.tcpxoInterfaces, runtimeInventory.mode
     ProviderConfigRef     *ProviderConfigRef           // kind (enum, default ClusterProviderConfig) + name
-    ProviderConfigRefFrom *ProviderConfigRefFrom       // field paths on the XR, same rules
+    DRAEviction           bool                         // wire AICR's DRA eviction contract
     SkipDeploymentOrder   bool                         // emit everything at once, no gate
+    ComponentClasses      []string                     // core and/or ops; unset = every class
     SkipComponents        []ComponentRef               // {name} entries removed from the recipe
     ComponentOverrides    map[string]ComponentOverride // version, namespace, values (RawExtension)
     Target                *Target                      // fieldPath (^status(\..+)?$) for the summary
@@ -152,18 +164,25 @@ The user-facing field reference lives in `README.md` ("Input reference"); keep i
 
 ### The recipe source
 
-The recipe catalog is function-level configuration, not part of the `Input`: by default the FS embedded in the pinned `github.com/NVIDIA/aicr` module, optionally overlaid with a digest-pinned OCI recipe artifact via the `--recipe-oci-repository` / `--recipe-oci-digest` flags (`RECIPE_OCI_REPOSITORY` / `RECIPE_OCI_DIGEST`). `newDataProvider` (main.go) pulls the artifact **once at startup** through `aicr/pkg/recipe/ocisource` — never per request, so no reconcile waits on a registry — and a pull failure exits the process rather than falling back to embedded data. `ociPullOptions` requires both flags together and an immutable `sha256:` manifest digest (AICR refuses to materialize tag-selected artifacts anyway). The overlay's `repository@digest` identity is threaded through `Function.recipeSource` into the summary. Registry credentials come from the Docker config (`DOCKER_CONFIG`), connections are HTTPS-only, and extraction needs a writable temp dir (`TMPDIR`); see the README's "Recipe source" section for the deployment wiring.
+The recipe catalog is function-level configuration, not part of the `Input`: by default the FS embedded in the pinned `aicr.run` module, optionally overlaid with a digest-pinned OCI recipe artifact via the `--recipe-oci-repository` / `--recipe-oci-digest` flags (`RECIPE_OCI_REPOSITORY` / `RECIPE_OCI_DIGEST`). `newDataProvider` (main.go) pulls the artifact **once at startup** through `aicr/pkg/recipe/ocisource` — never per request, so no reconcile waits on a registry — and a pull failure exits the process rather than falling back to embedded data. `ociPullOptions` requires both flags together and an immutable `sha256:` manifest digest (AICR refuses to materialize tag-selected artifacts anyway). The overlay's `repository@digest` identity is threaded through `Function.recipeSource` into the summary. Registry credentials come from the Docker config (`DOCKER_CONFIG`), connections are HTTPS-only, and extraction needs a writable temp dir (`TMPDIR`); see the README's "Recipe source" section for the deployment wiring.
 
-### Criteria and provider-config resolution
+The recipe source is also the only way to opt in to one of AICR's opt-in mixins (the NVSentinel remediation steps, `nvsentinel-observability`, the `NVIDIADriver` wiring): a mixin applies only when an overlay lists it under `spec.mixins`, and no build option selects one. The README's "Opting in to a mixin" shows the two-file artifact. It was verified end to end on 2026-11-20 against a local TLS registry: a tarball pushed with `oras push <file>:application/vnd.oci.image.layer.v1.tar+gzip` is accepted, while the layer `oras` packs from a directory is refused with "OCI recipe layer contains an unsafe archive path component" because the archive has a `.` entry.
 
-`internal/resolve` applies four rules per field, for `criteria.*` and `providerConfigRef.*` alike:
+### Input resolution
 
-1. `*From.<field>` unset → the literal (possibly empty)
-2. `*From.<field>` resolves to a non-empty string on the observed XR → that value wins
-3. resolves to absent or `""` → fall back to the literal (Kubernetes cannot tell `""` from omitted)
-4. malformed path, or a non-string value → error (Fatal), never a silent fallback
+Every field of the `Input` is static, the value all composite resources get, unless the overlay sets it. `resolve.Input` reads the object at `overlayFrom.fieldPath` on the observed XR and merges it over the static Input:
 
-At least one criteria dimension must resolve; every unresolved dimension is passed to AICR **unstated**. Never default a dimension client-side (see Design Decisions). `Criteria.Validate()` (AICR's) checks stated values against AICR's enums; AICR's resolver then rejects a stated value no recipe honors.
+1. maps merge key by key, the overlay wins, static keys it does not set are kept
+2. a list replaces the static list whole
+3. a null or `""` counts as unset and keeps the static value (Kubernetes cannot tell `""` from omitted); under `componentOverrides.<component>.values` an empty string is a chart value like any other
+4. a path absent from the XR → the static Input alone
+5. a path holding anything but an object, an overlay that sets `overlayFrom` (or `apiVersion`, `kind`, `metadata`), a field the Input does not have → error (Fatal), never a silent fallback
+
+Both the static Input and the merged result are decoded strictly (`DisallowUnknownFields`), so a typo in the Composition or on the XR is Fatal. The XRD is what limits the overlay: Crossplane prunes fields the XRD does not declare, so a composite resource controls exactly the Input fields the XRD author put under the overlay path. `resolve.Criteria` and `resolve.ProviderConfigRef` then read the resolved Input.
+
+`profile` and `configuration` shape the recipe after the criteria selected it: `resolve.Profile` turns the one-entry map into AICR's `name=value` selection for `BuildFromCriteriaWithProfile`, and `resolve.BuildOptions` turns each set `configuration` choice into a `recipe.BuildOption`. Each is passed only when set, because AICR rejects one on a recipe it does not apply to, and AICR validates the values: the function mirrors no list of profile names, modes or interface rules.
+
+At least one criteria dimension must be set; every unset dimension is passed to AICR **unstated**. Never default a dimension client-side (see Design Decisions). `Criteria.Validate()` (AICR's) checks stated values against AICR's enums; AICR's resolver then rejects a stated value no recipe honors.
 
 ### Managed components
 
@@ -171,6 +190,7 @@ At least one criteria dimension must resolve; every unresolved dimension is pass
 
 - `ComponentRefs` **includes components the recipe disables** (`IsEnabled() == false`); only `DeploymentOrder` omits them. Filter on `IsEnabled()`, as AICR's own deployers do.
 - `skipComponents` removes more; a name matching nothing raises a Warning result.
+- `componentClasses` keeps only the components whose class in AICR's registry (`registry.Get(name).GetClass()`, `core` or `ops`) it names; `validateClasses` makes any other name Fatal, since a misspelled class would deploy nothing and report success.
 - Only `recipe.ComponentTypeHelm` refs are managed; other types are reported as Normal results and skipped.
 - A dependency that is not managed (skipped, disabled, absent) counts as satisfied for gating.
 
@@ -183,6 +203,16 @@ Composed resources are `map[string]any` (see Design Decisions), built in `intern
 
 Names are pure functions of their inputs because the gate correlates observed against desired resources by name. This also means one composite per target namespace: two would claim the same names.
 
+### DRA eviction
+
+`draEviction: true` makes `stack.wireDRAEviction` write AICR's DRA eviction contract into the values of `gpu-operator` (`driver.manager.env` gains `NODE_LABEL_FOR_GPU_POD_EVICTION`), `nvidia-dra-driver-gpu` (`kubeletPlugin.nodeSelector` gains the label) and `dra-node-labeler` (`enabled`, `labelKey`, `labelValue`). It runs before the manifests are rendered and after the overrides are merged (`stack.takeValues` merges and clears them), as the bundler injects after user overrides. Missing any of the three components is a Warning and nothing is wired.
+
+`compose.WireDRAEviction` is a copy of logic AICR's bundler keeps unexported (`injectDRAEvictionLabel`, `mergeDRAEvictionNodeSelector` and `upsertGPUOperatorDRAEvictionEnv` in `aicr.run/pkg/bundler/bundler.go`); only the default label is imported, from `aicr.run/pkg/defaults`. Two tests guard the copy: `TestDRAEvictionConstants` parses the bundler source of the pinned module and compares its constants with ours, and `TestDRAEvictionAcrossTheCatalog` wires every leaf that has the three components and requires the labeler to render.
+
+### Sticky namespaces
+
+`stack.keepNamespaces` runs before the manifests are rendered. A chart-backed component whose observed Release has a `spec.forProvider.namespace` other than the recipe's keeps the observed one (it is written into the component's `compose.Override`, so the Release and the manifests agree) and a Warning names both namespaces. An explicit `componentOverrides.<component>.namespace` wins and is how a component is moved. A manifest-only component has no Release: it follows a dependency whose namespace was kept when the recipe places both in the same namespace, so a CR stays next to its operator. aicr v1.3.0 moved `nodewright-operator` from `skyhook` to `nodewright`; `KeepsTheNamespaceOfADeployedRelease` pins that case.
+
 ### The gate
 
 `stack.gate` (fn.go) removes from `desired` whatever is not yet allowed by **observed** readiness, per managed component:
@@ -194,13 +224,17 @@ Names are pure functions of their inputs because the gate correlates observed ag
 
 Two invariants: readiness is read from `observed`, never from `desired[...].Ready` (that is set by function-auto-ready later in the pipeline — reading it would deadlock); and `withhold` never removes something already observed (the gate orders creation, it must not tear down a live resource because a sibling flapped). Every withholding emits a `Normal` result naming the blocker.
 
+### Upgrade warnings
+
+`stack.warnUnsafeUpgrades` runs after the gate. `stack.versionChanges` collects the chart-backed components whose observed Release has a `spec.forProvider.chart.version` other than the one `compose.Placement` now gives, and `unsafeUpgrades` runs them through `upgrade.Match` against the records `recipe.LoadUpgradeRecords` reads from the catalog (ADR-021). Every result whose `FailsRun()` is true, which is everything but `safe`, becomes a Warning quoting AICR's `Explanation` and the `Summary` of each crossed record. Nothing is held back: holding a version needs a design for acknowledging the move. `aicr.run/pkg/upgrade` is in AICR's "Internal" tier, so expect signature changes on a bump; `TestUpgradeRecords` fails when the embedded records no longer load or validate.
+
 ### Required schemas
 
-`composedKind` (fn.go) wraps the protocol for the two kinds. Only kinds the recipe needs are required (`needs(managed)`), so a recipe without manifest files does not force provider-kubernetes to be installed. Decision table: capability absent → Fatal; requirement unresolved → return with no composed resources (Crossplane calls again); resolved to nil → Fatal naming the provider; resolved → `schema.NewValidator` once per kind, `Validate` every resource, violation Fatal.
+`composedKind` (fn.go) wraps the protocol for the two kinds. Only kinds the recipe composes are required: `stack.needs` runs after `stack.renderObjects`, so a recipe whose manifest files render no document does not force provider-kubernetes to be installed. In the aicr v1.3.0 catalog 78 of the 81 leaf recipes include the manifest-only `dra-node-labeler`, whose manifest renders nothing unless its `enabled` value is true. Decision table: capability absent → Fatal; requirement unresolved → return with no composed resources (Crossplane calls again); resolved to nil → Fatal naming the provider; resolved → `schema.NewValidator` once per kind, `Validate` every resource, violation Fatal.
 
 ### The resolved-recipe summary
 
-`stack.summary` returns `recipeName` (`accelerator-service[-os]-intent[-platform]`, unstated dimensions omitted), `recipeVersion` (the aicr module version), `recipeSource` (the OCI overlay's `repository@digest`, present only when the function serves one), `componentCount` and `deployedComponents` (managed components whose composed resources are all present in `desired`, in `DeploymentOrder`). `setStatus` sets each key individually under `target.fieldPath` on the desired XR read from the request, so sibling keys survive and the function never needs the XR's kind. Crossplane prunes fields the XRD does not declare — the example XRD declares `status.aicr`.
+`stack.summary` returns `recipeName` (`accelerator-service[-os]-intent[-platform]`, unstated dimensions omitted), `recipeVersion` (the aicr module version), `recipeSource` (the OCI overlay's `repository@digest`, present only when the function serves one), `profile` (`Metadata.SelectedProfile` as `name=value`, which AICR also records for a default variant), `appliedOverlays` (`Metadata.AppliedOverlays`), `componentCount`, `deployedComponents` and `pendingComponents`. The last three cover the managed components that compose a resource (`stack.composes`: chart-backed, or manifest-only with at least one rendered Object), in `DeploymentOrder`: a deployed one has everything it composes present in `desired` and is listed with the namespace and chart version from `compose.Placement`, overrides and a kept namespace included; a pending one carries `waitingFor`, the blocker `stack.gate` recorded in `stack.waiting`. A manifest-only component whose manifests render nothing, such as `dra-node-labeler` by default, appears in neither list and is not counted. `setStatus` sets each key individually under `target.fieldPath` on the desired XR read from the request, so sibling keys survive and the function never needs the XR's kind. Crossplane prunes fields the XRD does not declare — the example XRD declares `status.aicr`.
 
 ## Development Guide
 
@@ -297,19 +331,20 @@ Configuration is `.golangci.yml` (golangci-lint v2, the version CI pins is in `.
 
 1. Add the field to `input/v1beta1/input.go` with kubebuilder markers (`+optional`, enums, patterns)
 2. `go generate ./...` — regenerates deepcopy and the CRD under `package/input/`
-3. Wire it in `fn.go` (or `internal/resolve` for anything resolved from the XR)
+3. Wire it in `fn.go`. The overlay can set the new field with no further code; declare it in the example XRD if a composite resource should control it
 4. Add a `test-fixtures/input/*.yaml` fixture and a `TestRunFunction` case; name a new golden if it changes desired state, then `go generate ./...` and review `test-fixtures/want/`
 5. Document it in the README's "Input reference" table
 
 ### Bumping the AICR Module
 
-The `github.com/NVIDIA/aicr` version is the recipe catalog version. A bump is a **minor release** from `main` (see `/cut-release`), never a patch.
+The `aicr.run` version is the recipe catalog version (AICR renamed its Go module from `github.com/NVIDIA/aicr` in v1.3.0). A bump is a **minor release** from `main` (see `/cut-release`), never a patch.
 
-1. `go get github.com/NVIDIA/aicr@vX.Y.Z && go mod tidy`
+1. `go get aicr.run@vX.Y.Z && go mod tidy`
 2. `go test ./...` — `TestRunFunction` fails wherever recipe content changed; `TestCatalogInvariants` fails, naming the leaf and component, wherever a recipe's *shape* broke an assumption (a manifest that no longer renders, a name collision, a dependency edge into a component the gate cannot see)
 3. `go generate ./...` and **review the diff under `test-fixtures/want/`** — it is exactly what the function will now deploy. Commit it with the bump.
 4. Re-render the examples (`example/clusterstack/README.md`) for both XRs
-5. Fix behaviour changes by hand: the static parts of each response are asserted in code, not regenerated
+5. Re-read the bundler's DRA eviction wiring: `injectDRAEvictionLabel` and its two helpers in `aicr.run/pkg/bundler/bundler.go`, plus `draNodeLabelerDropReason` for when the labeler applies. `compose.WireDRAEviction` is a hand copy of that logic. `TestDRAEvictionConstants` catches a renamed constant or a moved value path; a change in behaviour (a new component in the contract, a new condition, a different merge rule) only shows in the source, so diff those functions against the previous AICR version and port what changed
+6. Fix behaviour changes by hand: the static parts of each response are asserted in code, not regenerated. A component the catalog adds joins every `TestRunFunction` fixture that does not list it under `skipComponents`; add it there to keep the pinned tier small
 
 Since aicr v0.19.0 the resolver enforces a coverage post-condition: every stated dimension must be honored by an applied overlay. Do not reintroduce client-side defaults (e.g. `os: ubuntu`) or cross-field rules — leave unresolved dimensions unstated and let AICR answer.
 
@@ -345,9 +380,9 @@ crossplane render xr.yaml composition.yaml functions.yaml \
 
 | Package | Purpose |
 |---------|---------|
-| `github.com/NVIDIA/aicr` | Recipe engine (`pkg/recipe`), manifest renderer (`pkg/manifest`) and the embedded catalog; its version is what the function deploys |
+| `aicr.run` | Recipe engine (`pkg/recipe`), manifest renderer (`pkg/manifest`) and the embedded catalog; its version is what the function deploys |
 | `github.com/crossplane/function-sdk-go` | Crossplane function SDK (request/response helpers, required schemas) |
-| `github.com/crossplane/crossplane-runtime/v2` | `fieldpath.Paved` for XR field paths |
+| `github.com/crossplane/crossplane-runtime/v2` | `fieldpath.Paved` for the overlay and status field paths on the XR |
 | `github.com/crossplane/crossplane/apis/v2` | Condition types (`xpv2.TypeReady`) |
 | `k8s.io/apiextensions-apiserver` | OpenAPI v3 schema validation of composed resources |
 | `sigs.k8s.io/controller-tools` | Input CRD generation (`go generate`) |
@@ -363,17 +398,25 @@ Importing provider-helm's / provider-kubernetes' typed API structs conflicts wit
 
 The gate reads `observed[...]` conditions, never `desired[...].Ready`, because readiness in desired state is set by function-auto-ready later in the pipeline. Nothing already observed is ever withheld. Manifest-only dependencies are resolved through the Objects they emitted, not their bare name.
 
+### One Overlay Object Instead of Per-Field Paths
+
+Until v0.2 each sourced field had a `...From` twin holding a field path (`criteriaFrom`, `providerConfigRefFrom`). That doubled the API with every new field and only fit strings, while AICR's inputs now include lists and maps. `overlayFrom.fieldPath` reads one Input-shaped object instead: every field is sourceable with no mirrored types, the XRD documents and validates what a composite resource may set, and pruning makes the XRD the allowlist. A ConfigMap as the overlay source was rejected for the opposite properties: nothing validates it at admission and nothing shows what it may contain. The cost is that the XR nests the values under one object in the Input's shape.
+
 ### Never Default a Criteria Dimension Client-Side
 
 AICR's catalog decides which combinations exist. Unstated dimensions select the agnostic tier; a stated value no overlay honors is rejected by AICR (coverage post-condition since v0.19.0). The function validates enums and passes criteria through; it mirrors no cross-field rules.
 
 ### `recipeVersion` Comes From Build Info
 
-`main.go` reads the `github.com/NVIDIA/aicr` module version from `debug.ReadBuildInfo()` (honoring a `replace`) and injects it into `Function`; test binaries carry no module list, so tests pin `testRecipeVersion`. `moduleVersion(bi, path)` is the pure, testable helper.
+`main.go` reads the `aicr.run` module version from `debug.ReadBuildInfo()` (honoring a `replace`) and injects it into `Function`; test binaries carry no module list, so tests pin `testRecipeVersion`. `moduleVersion(bi, path)` is the pure, testable helper.
 
 ### Manifest Files Are Rendered With AICR's Renderer
 
 30 of the 36 manifest files in the v0.19.0 catalog are Go/Helm templates. Skipping files that contain `{{` would silently drop most recipe content, so they are rendered with `aicr/pkg/manifest.Render` exactly as AICR's bundler does; a render or parse failure is Fatal.
+
+### A Deployed Release Is Never Relocated
+
+A Helm release cannot be moved between namespaces, so when an AICR bump changes a component's default namespace the function keeps the namespace the observed Release has, rather than emitting the new one. This is the one place observed state shapes a composed resource instead of only gating it. It is safe against the pipeline-order problem the gate has, because the value is read from the observed Release's spec, which is what the function itself last emitted, not from a status another function sets. AICR solves the same problem for its bundles with `aicr recipe --inherit-from <previous> --inherit=namespace`.
 
 ### Deterministic Names, One Composite per Namespace
 
@@ -390,14 +433,14 @@ AICR's pull budget is minutes (staging, digest authorization, extraction) while 
 - `input/v1beta1/input.go` — authoritative Input schema
 - `test-fixtures/generate.go` — how the goldens are produced
 - `.claude/skills/cut-release/SKILL.md` — cutting a minor/major release (`release-X.Y` branch, tag, package publish); one release branch is kept at a time
-- `.claude/skills/remediate-cves/SKILL.md` — patch releases for Grype/code-scanning findings against the latest release; never bumps `github.com/NVIDIA/aicr`
+- `.claude/skills/remediate-cves/SKILL.md` — patch releases for Grype/code-scanning findings against the latest release; never bumps `aicr.run`
 
 ## Releasing
 
 Releases are driven by two skills; use them rather than improvising the branch/tag/publish sequence:
 
 - **`/cut-release`** — a new minor or major version from `main` HEAD: new `release-X.Y` branch, tag (`.github/workflows/tag.yml`), GitHub release, package publish (`publish-pkg.yml` → `ghcr.io/jonasz-lasut/function-aicr`, mirrored to `xpkg.upbound.io/jonasz-lasut/function-aicr`), signing/attestation (`supplychain.yml`). The bump size is the user's choice, never inferred. An aicr module bump always ships this way.
-- **`/remediate-cves`** — a patch release on the current `release-X.Y` branch for CVEs found by `grype-scan.yml` (weekly against the latest release). It never bumps `github.com/NVIDIA/aicr`.
+- **`/remediate-cves`** — a patch release on the current `release-X.Y` branch for CVEs found by `grype-scan.yml` (weekly against the latest release). It never bumps `aicr.run`.
 
 ## Troubleshooting
 
@@ -419,11 +462,15 @@ Y is not reaching `Ready` in the target cluster (check the `Release`/`Object` in
 
 ### "cannot pull the OCI recipe source …" at startup
 
-The function exits (and the pod crashloops) when the `--recipe-oci-*` source cannot be pulled or validated. `--recipe-oci-digest` must be the artifact's immutable `sha256:` manifest digest, not a tag. An auth error means the Docker config (`DOCKER_CONFIG`) lacks credentials for the registry; a TLS error means the registry's CA is not in the trust store (`SSL_CERT_FILE`); "invalid materialized OCI recipe catalog" means the artifact is not a recipe tree rooted at `registry.yaml`. There is deliberately no fallback to the embedded catalog.
+The function exits (and the pod crashloops) when the `--recipe-oci-*` source cannot be pulled or validated. `--recipe-oci-digest` must be the artifact's immutable `sha256:` manifest digest, not a tag. An auth error means the Docker config (`DOCKER_CONFIG`) lacks credentials for the registry; a TLS error means the registry's CA is not in the trust store (`SSL_CERT_FILE`); "invalid materialized OCI recipe catalog" means the artifact is not a recipe tree rooted at `registry.yaml`; an error naming the `apiVersion` of the external `registry.yaml` means the artifact was authored for an AICR older than v1.0.0, which retired the alpha catalog versions. There is deliberately no fallback to the embedded catalog.
+
+### "this recipe ships torch-distributed-tcpxo and requires configuration.gke.tcpxoInterfaces"
+
+The `h100` / `gke` / `cos` / `training` / `kubeflow` recipe needs a GKE TCPXO interface mapping. Set `configuration.gke.tcpxoInterfaces`, usually through the overlay, since the network names are per cluster. `TestCatalogInvariants` resolves the leaf with AICR's introspection mapping so its shape stays covered.
 
 ### "no recipe provides os 'ubuntu' for criteria(…)" / "invalid AICR recipe criteria"
 
-A stated dimension is not honored by any overlay for the others. Leave it unstated (unset the literal / let the `criteriaFrom` path be absent) rather than defaulting it.
+A stated dimension is not honored by any overlay for the others. Leave it unstated, in the Input and in the overlay, rather than defaulting it.
 
 ### The summary does not show up in the XR's status
 

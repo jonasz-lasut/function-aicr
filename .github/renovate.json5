@@ -85,14 +85,14 @@
       groupName: 'crossplane',
     },
 
-    // github.com/NVIDIA/aicr *is* the recipe catalog: bumping it changes what
+    // aicr.run (AICR's Go module) *is* the recipe catalog: bumping it changes what
     // the function deploys, always ships as a minor release from main, and needs
     // `go generate ./...` plus a review of test-fixtures/want/ and the example
     // renders (AGENTS.md, "Bumping the AICR module"). Surface new versions on
     // the dashboard and open the PR only on approval, never in a bulk PR.
     {
       matchManagers: ['gomod'],
-      matchDepNames: ['github.com/NVIDIA/aicr'],
+      matchDepNames: ['aicr.run'],
       groupName: 'aicr',
       dependencyDashboardApproval: true,
       automerge: false,

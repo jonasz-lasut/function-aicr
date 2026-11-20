@@ -14,12 +14,8 @@ spec:
     input:
       apiVersion: aicr.fn.crossplane.io/v1beta1
       kind: Input
-      criteriaFrom:
-        accelerator: spec.accelerator
-        service: spec.service
-        intent: spec.intent
-        os: spec.os
-        platform: spec.platform
+      overlayFrom:
+        fieldPath: spec.aicr
       providerConfigRef:
         kind: ClusterProviderConfig
         name: gpu-cluster

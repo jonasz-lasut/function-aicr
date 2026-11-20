@@ -6,8 +6,19 @@ metadata:
   namespace: default
 status:
   aicr:
-    componentCount: 1
+    appliedOverlays:
+    - base
+    - monitoring-hpa
+    - h100-any
+    - kind
+    - h100-kind-training
+    componentCount: 2
     deployedComponents:
     - name: cert-manager
+      namespace: cert-manager
+      version: v1.20.2
+    pendingComponents:
+    - name: gpu-operator
+      waitingFor: cert-manager
     recipeName: h100-kind-training
     recipeVersion: v0.0.0-test

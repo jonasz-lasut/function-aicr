@@ -1,0 +1,31 @@
+apiVersion: aicr.fn.crossplane.io/v1beta1
+kind: Input
+criteria:
+  accelerator: h100
+  service: gke
+  intent: training
+  os: cos
+configuration:
+  runtimeInventory:
+    mode: enabled
+providerConfigRef:
+  kind: ClusterProviderConfig
+  name: gpu-cluster
+skipDeploymentOrder: true
+skipComponents:
+- name: cert-manager
+- name: dra-node-labeler
+- name: gcp-driver-installer
+- name: gke-nccl-tcpxo
+- name: gpu-operator
+- name: k8s-ephemeral-storage-metrics
+- name: kai-scheduler
+- name: kube-prometheus-stack
+- name: nfd
+- name: nktp
+- name: nodewright-customizations
+- name: nodewright-operator
+- name: nvidia-dra-driver-gpu
+- name: nvsentinel
+- name: prometheus-adapter
+- name: prometheus-operator-crds

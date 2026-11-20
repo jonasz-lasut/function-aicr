@@ -4,6 +4,8 @@ metadata:
   name: gpu-training-stack
   namespace: default
 spec:
-  accelerator: h100
-  service: kind
-  intent: training
+  aicr:
+    criteria:
+      accelerator: h100
+      service: kind
+      intent: training

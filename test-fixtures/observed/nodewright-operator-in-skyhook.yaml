@@ -1,0 +1,11 @@
+apiVersion: helm.m.crossplane.io/v1beta1
+kind: Release
+metadata:
+  name: nodewright-operator
+spec:
+  forProvider:
+    namespace: skyhook
+status:
+  conditions:
+    - type: Ready
+      status: "True"

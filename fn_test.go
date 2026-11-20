@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	sigsyaml "sigs.k8s.io/yaml"
 
+	"github.com/crossplane/crossplane-runtime/v2/pkg/fieldpath"
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	"github.com/crossplane/function-sdk-go/logging"
 	fnv1 "github.com/crossplane/function-sdk-go/proto/v1"
@@ -27,7 +28,8 @@ import (
 	"github.com/crossplane/function-sdk-go/resource/composed"
 	"github.com/crossplane/function-sdk-go/response"
 
-	"github.com/NVIDIA/aicr/pkg/recipe"
+	"aicr.run/pkg/recipe"
+	"aicr.run/pkg/upgrade"
 
 	"github.com/jonasz-lasut/function-aicr/input/v1beta1"
 	"github.com/jonasz-lasut/function-aicr/internal/compose"
@@ -37,7 +39,7 @@ import (
 // update regenerates test-fixtures/want from the function's own output instead
 // of comparing against it. It is driven by `go generate ./...` (see
 // test-fixtures/generate.go); the resulting diff is what the function will
-// deploy after a github.com/NVIDIA/aicr bump, and deserves review.
+// deploy after a aicr.run bump, and deserves review.
 var update = flag.Bool("update", false, "regenerate test-fixtures/want from the function's output")
 
 const (
@@ -223,7 +225,7 @@ func TestRunFunction(t *testing.T) {
 		want   want
 	}{
 		"ResolvesRecipeFromAnyXR": {
-			reason: "With schemas resolved, criteriaFrom pulls criteria off an XR the function knows nothing about; overrides and skips are applied.",
+			reason: "With schemas resolved, the overlay read from the XR supplies the criteria, whatever the XR's kind; overrides and skips are applied.",
 			args: args{
 				ctx: context.Background(),
 				req: &fnv1.RunFunctionRequest{
@@ -243,7 +245,7 @@ func TestRunFunction(t *testing.T) {
 			},
 		},
 		"ResolvesProviderConfigFromXR": {
-			reason: "providerConfigRefFrom pulls the provider config off the XR, so one Composition can target the cluster each XR names; the composed Release carries it.",
+			reason: "The overlay supplies the provider config over the static one, so one Composition can target the cluster each XR names; the composed Release carries it.",
 			args: args{
 				ctx: context.Background(),
 				req: &fnv1.RunFunctionRequest{
@@ -263,7 +265,7 @@ func TestRunFunction(t *testing.T) {
 			},
 		},
 		"RendersManifestsIntoObjects": {
-			reason: "A component's manifest files are Helm-style templates; they are rendered with the recipe's values and emitted as Objects — here the manifest-only nodewright-customizations' Skyhook CR next to nodewright-operator's Release — and the Object schema is required only because the recipe carries manifests.",
+			reason: "A component's manifest files are Helm-style templates; they are rendered with the recipe's values and emitted as Objects — here the manifest-only nodewright-customizations' NodeWright CR next to nodewright-operator's Release — and the Object schema is required only because a manifest file renders a document.",
 			args: args{
 				ctx: context.Background(),
 				req: &fnv1.RunFunctionRequest{
@@ -283,6 +285,190 @@ func TestRunFunction(t *testing.T) {
 					Conditions:   []*fnv1.Condition{functionSuccess()},
 				},
 				golden: golden{resources: "render-manifests"},
+			},
+		},
+		"RequiresNoObjectSchemaWhenManifestsRenderNothing": {
+			reason: "dra-node-labeler is manifest-only and its one manifest file renders no document unless enabled; a component that composes no Object must not make the function require the Object schema, or every recipe would oblige the user to install provider-kubernetes.",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:            meta(),
+					Input:           yamlToProto("input/manifest-renders-nothing.yaml"),
+					Observed:        &fnv1.State{Composite: fixture("observed/xr.yaml")},
+					RequiredSchemas: map[string]*fnv1.Schema{"release": permissiveSchema()},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta:         respMeta,
+					Requirements: releaseRequirement(),
+					Conditions:   []*fnv1.Condition{functionSuccess()},
+				},
+				golden: golden{resources: "resolve"},
+			},
+		},
+		"PassesTheGKETCPXOMappingFromTheXR": {
+			reason: "The kubeflow recipe on GKE requires the cluster's GPU network names. They are a list only the XR knows, so they arrive through the overlay and reach AICR as a build option; the kubeflow-trainer Release and its TCPXO runtime Object carry them.",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:     meta(),
+					Input:    yamlToProto("input/gke-tcpxo.yaml"),
+					Observed: &fnv1.State{Composite: fixture("observed/xr-gke-kubeflow.yaml")},
+					RequiredSchemas: map[string]*fnv1.Schema{
+						"release": permissiveSchema(),
+						"object":  permissiveSchema(),
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta:         respMeta,
+					Requirements: releaseAndObjectRequirements(),
+					Conditions:   []*fnv1.Condition{functionSuccess()},
+				},
+				golden: golden{resources: "gke-tcpxo"},
+			},
+		},
+		"SelectsAProfile": {
+			reason: "profile selects a variant of the recipe: with gpuStack=dra on GKE the DRA driver is deployed as the GPU advertiser.",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:            meta(),
+					Input:           yamlToProto("input/profile.yaml"),
+					Observed:        &fnv1.State{Composite: fixture("observed/xr.yaml")},
+					RequiredSchemas: map[string]*fnv1.Schema{"release": permissiveSchema()},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta:         respMeta,
+					Requirements: releaseRequirement(),
+					Conditions:   []*fnv1.Condition{functionSuccess()},
+				},
+				golden: golden{resources: "profile"},
+			},
+		},
+		"EnablesRuntimeInventory": {
+			reason: "configuration.runtimeInventory.mode enabled adds k8s-aibom to a GKE recipe that does not include it.",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:            meta(),
+					Input:           yamlToProto("input/runtime-inventory.yaml"),
+					Observed:        &fnv1.State{Composite: fixture("observed/xr.yaml")},
+					RequiredSchemas: map[string]*fnv1.Schema{"release": permissiveSchema()},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta:         respMeta,
+					Requirements: releaseRequirement(),
+					Conditions:   []*fnv1.Condition{functionSuccess()},
+				},
+				golden: golden{resources: "runtime-inventory"},
+			},
+		},
+		"DeploysOnlyTheNamedComponentClasses": {
+			reason: "With componentClasses [core] the ops component the fixture does not skip, kai-scheduler, is left out and the core ones are composed.",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:            meta(),
+					Input:           yamlToProto("input/component-classes.yaml"),
+					Observed:        &fnv1.State{Composite: fixture("observed/xr.yaml")},
+					RequiredSchemas: map[string]*fnv1.Schema{"release": permissiveSchema()},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta:         respMeta,
+					Requirements: releaseRequirement(),
+					Conditions:   []*fnv1.Condition{functionSuccess()},
+				},
+				golden: golden{resources: "component-classes"},
+			},
+		},
+		"KeepsTheNamespaceOfADeployedRelease": {
+			reason: "The recipe now places nodewright-operator in the nodewright namespace, but its Release is observed in skyhook: a live Helm release is never relocated, the manifest-only nodewright-customizations follows the operator it depends on, and the kept namespace is reported.",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:  meta(),
+					Input: yamlToProto("input/render-manifests.yaml"),
+					Observed: &fnv1.State{
+						Composite: fixture("observed/xr.yaml"),
+						Resources: map[string]*fnv1.Resource{
+							"nodewright-operator": fixture("observed/nodewright-operator-in-skyhook.yaml"),
+						},
+					},
+					RequiredSchemas: map[string]*fnv1.Schema{
+						"release": permissiveSchema(),
+						"object":  permissiveSchema(),
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta:         respMeta,
+					Requirements: releaseAndObjectRequirements(),
+					Results: []*fnv1.Result{{
+						Severity: fnv1.Severity_SEVERITY_WARNING,
+						Message:  `"nodewright-operator" stays in namespace "skyhook", where it is deployed, although the recipe places it in "nodewright"; set componentOverrides["nodewright-operator"].namespace to "nodewright" to move it`,
+						Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
+					}},
+					Conditions: []*fnv1.Condition{functionSuccess()},
+				},
+				golden: golden{resources: "keep-namespace"},
+			},
+		},
+		"WiresDRAEviction": {
+			reason: "draEviction wires the three halves of AICR's eviction contract after the overrides: the Driver Manager's environment keeps the entry the override adds and gains the label key, the DRA kubelet plugin is scheduled on the label, and dra-node-labeler, whose manifest renders nothing by default, is enabled and composes its Objects.",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:     meta(),
+					Input:    yamlToProto("input/dra-eviction.yaml"),
+					Observed: &fnv1.State{Composite: fixture("observed/xr.yaml")},
+					RequiredSchemas: map[string]*fnv1.Schema{
+						"release": permissiveSchema(),
+						"object":  permissiveSchema(),
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta:         respMeta,
+					Requirements: releaseAndObjectRequirements(),
+					Conditions:   []*fnv1.Condition{functionSuccess()},
+				},
+				golden: golden{resources: "dra-eviction"},
+			},
+		},
+		"WarnsWhenDRAEvictionHasNoContract": {
+			reason: "Without all three components there is no contract: wiring one half would schedule the plugin on a label nothing applies, so nothing is wired and the opt-in is reported.",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:            meta(),
+					Input:           yamlToProto("input/dra-eviction-incomplete.yaml"),
+					Observed:        &fnv1.State{Composite: fixture("observed/xr.yaml")},
+					RequiredSchemas: map[string]*fnv1.Schema{"release": permissiveSchema()},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta:         respMeta,
+					Requirements: releaseRequirement(),
+					Results: []*fnv1.Result{{
+						Severity: fnv1.Severity_SEVERITY_WARNING,
+						Message:  `draEviction is set, but "nvidia-dra-driver-gpu" is not a managed component of the resolved recipe; the eviction contract spans gpu-operator, nvidia-dra-driver-gpu, dra-node-labeler, so nothing is wired`,
+						Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
+					}},
+					Conditions: []*fnv1.Condition{functionSuccess()},
+				},
+				golden: golden{resources: "dra-eviction-incomplete"},
 			},
 		},
 		"WritesSummaryToTarget": {
@@ -424,7 +610,7 @@ func TestRunFunction(t *testing.T) {
 			},
 		},
 		"FatalWhenProviderConfigNameMissing": {
-			reason: "A provider config name must come from providerConfigRef or a providerConfigRefFrom path.",
+			reason: "A provider config name must come from the Input or from its overlay.",
 			args: args{
 				ctx: context.Background(),
 				req: &fnv1.RunFunctionRequest{
@@ -436,7 +622,24 @@ func TestRunFunction(t *testing.T) {
 			want: want{
 				rsp: &fnv1.RunFunctionResponse{
 					Meta:    respMeta,
-					Results: fatal("cannot resolve the provider config reference: providerConfigRef.name is required: set it, or a providerConfigRefFrom.name field path that resolves on the composite resource"),
+					Results: fatal("cannot resolve the provider config reference: providerConfigRef.name is required: set it in the Input, or in the overlay overlayFrom.fieldPath reads from the composite resource"),
+				},
+			},
+		},
+		"FatalWhenInputHasRemovedField": {
+			reason: "A Composition still written for the per-field criteriaFrom is told what replaced it, rather than resolving a recipe without the criteria it meant to state.",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:     meta(),
+					Input:    yamlToProto("input/removed-criteria-from.yaml"),
+					Observed: &fnv1.State{Composite: fixture("observed/xr.yaml")},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta:    respMeta,
+					Results: fatal("cannot resolve the function input: criteriaFrom was removed: read values from the composite resource with overlayFrom.fieldPath"),
 				},
 			},
 		},
@@ -471,6 +674,40 @@ func TestRunFunction(t *testing.T) {
 				rsp: &fnv1.RunFunctionResponse{
 					Meta:    respMeta,
 					Results: fatal("invalid AICR recipe criteria: [INVALID_REQUEST] invalid accelerator: [INVALID_REQUEST] invalid accelerator type: bogus"),
+				},
+			},
+		},
+		"FatalWhenRecipeNeedsConfiguration": {
+			reason: "A recipe that requires the GKE TCPXO interface mapping fails with AICR's own message when configuration.gke.tcpxoInterfaces is not set, rather than deploying a runtime without its networks.",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:     meta(),
+					Input:    yamlToProto("input/needs-recipe-configuration.yaml"),
+					Observed: &fnv1.State{Composite: fixture("observed/xr.yaml")},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta:    respMeta,
+					Results: fatal("cannot resolve AICR recipe: [INVALID_REQUEST] this recipe ships torch-distributed-tcpxo and requires configuration.gke.tcpxoInterfaces; supply --gke-tcpxo-interfaces eth1=<network>,...,eth8=<network> or spec.recipe.configuration.gke.tcpxoInterfaces"),
+				},
+			},
+		},
+		"FatalWhenComponentClassUnknown": {
+			reason: "A misspelled class would filter out every component and report a recipe that deploys nothing as a success.",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:     meta(),
+					Input:    yamlToProto("input/unknown-component-class.yaml"),
+					Observed: &fnv1.State{Composite: fixture("observed/xr.yaml")},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta:    respMeta,
+					Results: fatal(`componentClasses names "cor", which is not an AICR component class (core, ops)`),
 				},
 			},
 		},
@@ -594,11 +831,11 @@ func TestRunFunction(t *testing.T) {
 // TestCatalogInvariants resolves every leaf recipe of the embedded AICR
 // catalog through the function's own building blocks and asserts the
 // properties the function relies on but TestRunFunction — which pins the
-// content of a single, manifest-free tier — cannot see. An AICR bump that ships
-// a manifest that does not render, two documents that map to the same Object
-// name, a disabled component in the deployment order, a dependency on a
-// component that is not in the recipe, or a dependency graph the gate can
-// never drain fails here, not in a cluster.
+// content of a single tier that composes no Object — cannot see. An AICR bump
+// that ships a manifest that does not render, two documents that map to the
+// same Object name, a disabled component in the deployment order, a
+// dependency on a component that is not in the recipe, or a dependency graph
+// the gate can never drain fails here, not in a cluster.
 func TestCatalogInvariants(t *testing.T) {
 	ctx := context.Background()
 	dp := embeddedDataProvider()
@@ -629,13 +866,22 @@ func TestCatalogInvariants(t *testing.T) {
 			}
 
 			// The function's own resolution path, without a snapshot evaluator.
-			res, err := recipe.NewBuilder(recipe.WithVersion(testRecipeVersion), recipe.WithDataProvider(dp)).BuildFromCriteria(ctx, criteria)
+			builder := recipe.NewBuilder(recipe.WithVersion(testRecipeVersion), recipe.WithDataProvider(dp))
+			res, err := builder.BuildFromCriteria(ctx, criteria)
+			if recipe.IsMissingGKETCPXOInterfaces(err) {
+				// The one leaf family with a required typed input: a GKE
+				// network mapping only a cluster can name, without which
+				// RunFunction is Fatal (FatalWhenRecipeNeedsConfiguration).
+				// Resolve it with AICR's fixed introspection mapping, as its
+				// own leaf enumeration does, so the leaf's shape stays covered.
+				res, err = builder.BuildFromCriteria(ctx, criteria, recipe.WithGKETCPXOInterfaces(recipe.GKETCPXOIntrospectionInterfaces()))
+			}
 			if err != nil {
 				t.Fatalf("BuildFromCriteria(%s): %v", criteria, err)
 			}
 
 			rsp := &fnv1.RunFunctionResponse{}
-			managed := managedComponents(rsp, res, &v1beta1.Input{})
+			managed := managedComponents(rsp, res, &v1beta1.Input{}, nil)
 			for _, r := range rsp.GetResults() {
 				if r.GetSeverity() == fnv1.Severity_SEVERITY_WARNING {
 					t.Errorf("managedComponents(...) warned with no skips or overrides configured: %s", r.GetMessage())
@@ -691,8 +937,11 @@ func TestCatalogInvariants(t *testing.T) {
 			if err := s.composeReleases(); err != nil {
 				t.Fatalf("composeReleases(): %v", err)
 			}
-			if err := s.composeObjects(ctx); err != nil {
-				t.Fatalf("composeObjects(...): %v", err)
+			if err := s.renderObjects(ctx); err != nil {
+				t.Fatalf("renderObjects(...): %v", err)
+			}
+			if err := s.composeObjects(); err != nil {
+				t.Fatalf("composeObjects(): %v", err)
 			}
 			releases, emitted := 0, 0
 			for _, name := range slices.Sorted(maps.Keys(managed)) {
@@ -750,8 +999,66 @@ func TestCatalogInvariants(t *testing.T) {
 	}
 }
 
+// TestDRAEvictionAcrossTheCatalog wires the DRA eviction contract into every
+// leaf recipe that has its three components. The wiring copies value paths
+// AICR's bundler keeps private, so an AICR bump can move them without a
+// compile error: here a leaf whose values no longer take the wiring, or whose
+// dra-node-labeler still renders nothing once enabled, fails by name.
+func TestDRAEvictionAcrossTheCatalog(t *testing.T) {
+	ctx := context.Background()
+	dp := embeddedDataProvider()
+
+	leaves, err := recipe.ResolveLeaves(ctx, recipe.ResolveLeavesOptions{Provider: dp, Version: testRecipeVersion})
+	if err != nil {
+		t.Fatalf("recipe.ResolveLeaves(...): %v", err)
+	}
+
+	wired := 0
+	for _, leaf := range leaves {
+		if leaf.Err != nil {
+			continue // TestCatalogInvariants reports it.
+		}
+		rsp := &fnv1.RunFunctionResponse{}
+		managed := managedComponents(rsp, leaf.Result, &v1beta1.Input{}, nil)
+		complete := true
+		for _, name := range []string{compose.GPUOperatorComponent, compose.DRADriverComponent, compose.DRANodeLabelerComponent} {
+			if _, ok := managed[name]; !ok {
+				complete = false
+			}
+		}
+		if !complete {
+			continue
+		}
+		wired++
+
+		t.Run(leaf.Entry.Name, func(t *testing.T) {
+			values, err := resolveValues(ctx, leaf.Result, managed)
+			if err != nil {
+				t.Fatalf("resolveValues(...): %v", err)
+			}
+			s := &stack{managed: managed, values: values, dp: dp}
+			rsp := &fnv1.RunFunctionResponse{}
+			if err := s.wireDRAEviction(rsp); err != nil {
+				t.Fatalf("wireDRAEviction(...): %v", err)
+			}
+			if len(rsp.GetResults()) > 0 {
+				t.Fatalf("wireDRAEviction(...) reported %v for a recipe that has all three components", rsp.GetResults())
+			}
+			if err := s.renderObjects(ctx); err != nil {
+				t.Fatalf("renderObjects(...): %v", err)
+			}
+			if len(s.objects.all(compose.DRANodeLabelerComponent)) == 0 {
+				t.Errorf("dra-node-labeler renders no document with the contract wired: nothing would apply the label the DRA kubelet plugin is scheduled on")
+			}
+		})
+	}
+	if wired == 0 {
+		t.Error("no leaf recipe has gpu-operator, nvidia-dra-driver-gpu and dra-node-labeler: the DRA eviction wiring has nothing left to wire")
+	}
+}
+
 // TestGate exercises the gate directly. The embedded "kind" recipe used by
-// TestRunFunction carries no manifest files, and its gate cases only ever place
+// TestRunFunction composes no Objects, and its gate cases only ever place
 // the dependency (cert-manager) in observed, never the dependent itself; so
 // neither the pre-/post-manifest waves nor the "never gate something already
 // created" guards have coverage there. The gate withholds resources by deleting
@@ -1026,6 +1333,267 @@ func TestGate(t *testing.T) {
 // TestManagedComponents exercises managedComponents directly: the embedded
 // "kind" recipe used by TestRunFunction has no disabled or non-Helm component,
 // and its skip lists name only real components.
+func TestKeepNamespaces(t *testing.T) {
+	const operator, customizations, other = "nodewright-operator", "nodewright-customizations", "cert-manager"
+
+	managed := map[string]*recipe.ComponentRef{
+		operator: {Name: operator, Type: recipe.ComponentTypeHelm, Namespace: "nodewright", Source: "oci://ghcr.io/nvidia/nodewright/charts", Chart: "nodewright"},
+		// Manifest-only, in the namespace of the operator it depends on.
+		customizations: {Name: customizations, Type: recipe.ComponentTypeHelm, Namespace: "nodewright", DependencyRefs: []string{operator}, ManifestFiles: []string{"tuning.yaml"}},
+		other:          {Name: other, Type: recipe.ComponentTypeHelm, Namespace: "cert-manager", Source: "https://charts.jetstack.io", Chart: "cert-manager"},
+	}
+	observedIn := func(namespaces map[string]string) map[resource.Name]resource.ObservedComposed {
+		observed := make(map[resource.Name]resource.ObservedComposed, len(namespaces))
+		for name, ns := range namespaces {
+			cd := composed.New()
+			cd.SetName(name)
+			if err := fieldpath.Pave(cd.Object).SetString("spec.forProvider.namespace", ns); err != nil {
+				t.Fatalf("SetString(...): %v", err)
+			}
+			observed[resource.Name(name)] = resource.ObservedComposed{Resource: cd}
+		}
+		return observed
+	}
+	kept := func(name, observed, wanted string) *fnv1.Result {
+		return &fnv1.Result{
+			Severity: fnv1.Severity_SEVERITY_WARNING,
+			Message:  fmt.Sprintf("%q stays in namespace %q, where it is deployed, although the recipe places it in %q; set componentOverrides[%q].namespace to %q to move it", name, observed, wanted, name, wanted),
+			Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
+		}
+	}
+
+	type args struct {
+		overrides map[string]*compose.Override
+		observed  map[resource.Name]resource.ObservedComposed
+	}
+	type want struct {
+		namespaces map[string]string
+		results    []*fnv1.Result
+	}
+
+	cases := map[string]struct {
+		reason string
+		args   args
+		want   want
+	}{
+		"NothingObserved": {
+			reason: "A component that is not deployed yet goes where the recipe places it.",
+			args:   args{},
+			want:   want{namespaces: map[string]string{}},
+		},
+		"ObservedWhereTheRecipePlacesIt": {
+			reason: "A Release already in the recipe's namespace needs nothing kept.",
+			args:   args{observed: observedIn(map[string]string{operator: "nodewright", other: "cert-manager"})},
+			want:   want{namespaces: map[string]string{}},
+		},
+		"KeepsTheObservedNamespace": {
+			reason: "A deployed Release keeps its namespace when the recipe moves the component, and the manifest-only component that shares the namespace of that dependency follows it; unrelated components are untouched.",
+			args:   args{observed: observedIn(map[string]string{operator: "skyhook", other: "cert-manager"})},
+			want: want{
+				namespaces: map[string]string{operator: "skyhook", customizations: "skyhook"},
+				results:    []*fnv1.Result{kept(operator, "skyhook", "nodewright")},
+			},
+		},
+		"ExplicitOverrideWins": {
+			reason: "componentOverrides namespace is how a component is moved deliberately: it wins over the observed namespace, and nothing is kept or reported.",
+			args: args{
+				overrides: map[string]*compose.Override{operator: {Namespace: "nodewright"}},
+				observed:  observedIn(map[string]string{operator: "skyhook"}),
+			},
+			want: want{namespaces: map[string]string{operator: "nodewright"}},
+		},
+		"ManifestOnlyOverrideWins": {
+			reason: "A manifest-only component with its own override does not follow its dependency.",
+			args: args{
+				overrides: map[string]*compose.Override{customizations: {Namespace: "tuning"}},
+				observed:  observedIn(map[string]string{operator: "skyhook"}),
+			},
+			want: want{
+				namespaces: map[string]string{operator: "skyhook", customizations: "tuning"},
+				results:    []*fnv1.Result{kept(operator, "skyhook", "nodewright")},
+			},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			rsp := &fnv1.RunFunctionResponse{}
+			s := &stack{managed: managed, overrides: tc.args.overrides, observed: tc.args.observed}
+
+			s.keepNamespaces(rsp)
+
+			got := make(map[string]string)
+			for name, o := range s.overrides {
+				if o.Namespace != "" {
+					got[name] = o.Namespace
+				}
+			}
+			if diff := cmp.Diff(tc.want.namespaces, got); diff != "" {
+				t.Errorf("%s\nkeepNamespaces(...): -want namespaces, +got namespaces:\n%s", tc.reason, diff)
+			}
+			if diff := cmp.Diff(tc.want.results, rsp.GetResults(), protocmp.Transform()); diff != "" {
+				t.Errorf("%s\nkeepNamespaces(...): -want results, +got results:\n%s", tc.reason, diff)
+			}
+		})
+	}
+}
+
+func TestVersionChanges(t *testing.T) {
+	const operator, scheduler, tuning = "gpu-operator", "kai-scheduler", "nodewright-customizations"
+
+	managed := map[string]*recipe.ComponentRef{
+		operator:  {Name: operator, Type: recipe.ComponentTypeHelm, Version: "v26.7.2", Source: "https://example.com", Chart: operator},
+		scheduler: {Name: scheduler, Type: recipe.ComponentTypeHelm, Version: "v0.16.9", Source: "https://example.com", Chart: scheduler},
+		tuning:    {Name: tuning, Type: recipe.ComponentTypeHelm, ManifestFiles: []string{"tuning.yaml"}},
+	}
+	observedAt := func(versions map[string]string) map[resource.Name]resource.ObservedComposed {
+		observed := make(map[resource.Name]resource.ObservedComposed, len(versions))
+		for name, version := range versions {
+			cd := composed.New()
+			cd.SetName(name)
+			if version != "" {
+				if err := fieldpath.Pave(cd.Object).SetString("spec.forProvider.chart.version", version); err != nil {
+					t.Fatalf("SetString(...): %v", err)
+				}
+			}
+			observed[resource.Name(name)] = resource.ObservedComposed{Resource: cd}
+		}
+		return observed
+	}
+
+	type args struct {
+		overrides map[string]*compose.Override
+		observed  map[resource.Name]resource.ObservedComposed
+	}
+	type want struct {
+		from map[string]string
+		to   map[string]string
+	}
+
+	cases := map[string]struct {
+		reason string
+		args   args
+		want   want
+	}{
+		"NothingObserved": {
+			reason: "A first install is not an upgrade.",
+			args:   args{},
+			want:   want{from: map[string]string{}, to: map[string]string{}},
+		},
+		"SameVersion": {
+			reason: "A Release already at the version it is composed with does not change; one observed without a version, and a manifest-only component, have nothing to compare.",
+			args:   args{observed: observedAt(map[string]string{operator: "v26.7.2", scheduler: "", tuning: "1.0.0"})},
+			want:   want{from: map[string]string{}, to: map[string]string{}},
+		},
+		"RecipeMovesTheVersion": {
+			reason: "A Release observed at another version than the recipe now pins is a version change.",
+			args:   args{observed: observedAt(map[string]string{operator: "v26.3.3", scheduler: "v0.16.9"})},
+			want:   want{from: map[string]string{operator: "v26.3.3"}, to: map[string]string{operator: "v26.7.2"}},
+		},
+		"OverrideMovesTheVersion": {
+			reason: "The version a component is composed with includes its override, so an override that changes a deployed version is assessed too.",
+			args: args{
+				overrides: map[string]*compose.Override{scheduler: {Version: "v0.17.1"}},
+				observed:  observedAt(map[string]string{operator: "v26.7.2", scheduler: "v0.16.9"}),
+			},
+			want: want{from: map[string]string{scheduler: "v0.16.9"}, to: map[string]string{scheduler: "v0.17.1"}},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			s := &stack{managed: managed, overrides: tc.args.overrides, observed: tc.args.observed}
+
+			from, to := s.versionChanges()
+
+			if diff := cmp.Diff(tc.want.from, from); diff != "" {
+				t.Errorf("%s\nversionChanges(): -want from, +got from:\n%s", tc.reason, diff)
+			}
+			if diff := cmp.Diff(tc.want.to, to); diff != "" {
+				t.Errorf("%s\nversionChanges(): -want to, +got to:\n%s", tc.reason, diff)
+			}
+		})
+	}
+}
+
+func TestUnsafeUpgrades(t *testing.T) {
+	// Hand-written records: the wording of AICR's own changes with every
+	// catalog bump, the rules for reading them do not.
+	set := upgrade.Set{
+		"operator": {Component: "operator", Transitions: []upgrade.Transition{
+			{From: "<2.0.0", To: ">=2.0.0 <3.0.0", Verdict: upgrade.VerdictManual, Summary: "2.0.0 renames the\n  Widget CRD."},
+			{From: ">=2.0.0 <3.0.0", To: ">=3.0.0 <4.0.0", Verdict: upgrade.VerdictSafe, Summary: "3.0.0 only adds fields."},
+		}},
+	}
+
+	// AICR words the explanation; the message quotes it rather than a copy
+	// of it, so a bump that rewords it does not fail here.
+	explanation := func(from, to map[string]string) string {
+		return upgrade.Match(set, from, to)[0].Explanation
+	}
+	manualFrom, manualTo := map[string]string{"operator": "1.5.0"}, map[string]string{"operator": "2.0.0"}
+	unknownFrom, unknownTo := map[string]string{"scheduler": "0.14.1"}, map[string]string{"scheduler": "0.16.9"}
+
+	type args struct {
+		from map[string]string
+		to   map[string]string
+	}
+	type want struct {
+		msgs []string
+	}
+
+	cases := map[string]struct {
+		reason string
+		args   args
+		want   want
+	}{
+		"SafeUpgrade": {
+			reason: "A change a record rates safe raises nothing.",
+			args:   args{from: map[string]string{"operator": "2.1.0"}, to: map[string]string{"operator": "3.0.0"}},
+			want:   want{},
+		},
+		"ManualUpgrade": {
+			reason: "A change a record rates manual is reported with AICR's explanation and the record's summary, its whitespace collapsed.",
+			args:   args{from: manualFrom, to: manualTo},
+			want: want{msgs: []string{
+				`upgrading "operator" from 1.5.0 to 2.0.0 is rated manual by AICR: ` + explanation(manualFrom, manualTo) + ` 2.0.0 renames the Widget CRD.`,
+			}},
+		},
+		"UnassessedUpgrade": {
+			reason: "A change no record covers is not a pass: nobody assessed it, so it is reported as unknown.",
+			args:   args{from: unknownFrom, to: unknownTo},
+			want: want{msgs: []string{
+				`upgrading "scheduler" from 0.14.1 to 0.16.9 is rated unknown by AICR: ` + explanation(unknownFrom, unknownTo),
+			}},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := unsafeUpgrades(set, tc.args.from, tc.args.to)
+			if diff := cmp.Diff(tc.want.msgs, got); diff != "" {
+				t.Errorf("%s\nunsafeUpgrades(...): -want, +got:\n%s", tc.reason, diff)
+			}
+		})
+	}
+}
+
+// TestUpgradeRecords guards the one part of the upgrade warnings that reads
+// the catalog: an AICR bump whose upgrade records no longer load or validate
+// would turn every assessment into a "cannot assess" warning.
+func TestUpgradeRecords(t *testing.T) {
+	set, components, err := recipe.LoadUpgradeRecords(context.Background(), embeddedDataProvider())
+	if err != nil {
+		t.Fatalf("recipe.LoadUpgradeRecords(...): %v", err)
+	}
+	if err := set.Validate(components); err != nil {
+		t.Errorf("Set.Validate(...): %v", err)
+	}
+	if len(set) == 0 {
+		t.Error("the embedded catalog has no upgrade records; the upgrade warnings would rate every change unknown")
+	}
+}
+
 func TestManagedComponents(t *testing.T) {
 	warning := func(format string, a ...any) *fnv1.Result {
 		return &fnv1.Result{
@@ -1042,9 +1610,19 @@ func TestManagedComponents(t *testing.T) {
 		{Name: "nfd", Type: recipe.ComponentTypeHelm, Source: "https://kubernetes-sigs.github.io/node-feature-discovery/charts", Chart: "node-feature-discovery", Overrides: map[string]any{"enabled": false}},
 		{Name: "kustomized", Type: recipe.ComponentTypeKustomize, Source: "https://example.com/repo", Path: "overlays/prod"},
 	}}
+	// The class of a component comes from AICR's registry: cert-manager and
+	// gpu-operator are core there.
+	registry, err := recipe.GetComponentRegistryFor(embeddedDataProvider())
+	if err != nil {
+		t.Fatalf("recipe.GetComponentRegistryFor(...): %v", err)
+	}
+	withOps := &recipe.RecipeResult{ComponentRefs: append(slices.Clone(res.ComponentRefs),
+		recipe.ComponentRef{Name: "kai-scheduler", Type: recipe.ComponentTypeHelm, Source: "oci://ghcr.io/kai-scheduler", Chart: "kai-scheduler"},
+	)}
 
 	type args struct {
-		in *v1beta1.Input
+		res *recipe.RecipeResult
+		in  *v1beta1.Input
 	}
 	type want struct {
 		managed []string
@@ -1081,6 +1659,28 @@ func TestManagedComponents(t *testing.T) {
 				results: []*fnv1.Result{warning(`skipComponents names %q, which is not a component of the resolved recipe; check the spelling`, "gpu-operatr")},
 			},
 		},
+		"OnlyTheNamedClassesAreManaged": {
+			reason: "componentClasses keeps the components whose class in AICR's registry it names, so the core GPU stack and the ops layer can be owned by separate composite resources; an override for a component it leaves out is reported like any other unmanaged one.",
+			args: args{
+				res: withOps,
+				in: &v1beta1.Input{
+					ComponentClasses:   []string{"core"},
+					SkipComponents:     []v1beta1.ComponentRef{{Name: "kustomized"}},
+					ComponentOverrides: map[string]v1beta1.ComponentOverride{"kai-scheduler": {Version: "v99.0.0"}},
+				},
+			},
+			want: want{
+				managed: []string{"cert-manager", "gpu-operator"},
+				results: []*fnv1.Result{
+					warning(`componentOverrides[%q] names no managed component of the resolved recipe (skipped, left out by componentClasses, disabled by the recipe, or misspelled); the override is ignored`, "kai-scheduler"),
+				},
+			},
+		},
+		"EveryClassIsManagedByDefault": {
+			reason: "Without componentClasses the class of a component does not matter.",
+			args:   args{res: withOps, in: &v1beta1.Input{SkipComponents: []v1beta1.ComponentRef{{Name: "kustomized"}}}},
+			want:   want{managed: []string{"cert-manager", "gpu-operator", "kai-scheduler"}},
+		},
 		"UnmanagedOverrideWarns": {
 			reason: "A componentOverrides entry for anything not managed — misspelled, skipped, or disabled by the recipe — is silently ignored otherwise; warnings are sorted by name.",
 			args: args{in: &v1beta1.Input{
@@ -1094,8 +1694,8 @@ func TestManagedComponents(t *testing.T) {
 			want: want{
 				managed: []string{"cert-manager", "gpu-operator"},
 				results: []*fnv1.Result{
-					warning(`componentOverrides[%q] names no managed component of the resolved recipe (skipped, disabled by the recipe, or misspelled); the override is ignored`, "gpu-operatr"),
-					warning(`componentOverrides[%q] names no managed component of the resolved recipe (skipped, disabled by the recipe, or misspelled); the override is ignored`, "mariadb-operator"),
+					warning(`componentOverrides[%q] names no managed component of the resolved recipe (skipped, left out by componentClasses, disabled by the recipe, or misspelled); the override is ignored`, "gpu-operatr"),
+					warning(`componentOverrides[%q] names no managed component of the resolved recipe (skipped, left out by componentClasses, disabled by the recipe, or misspelled); the override is ignored`, "mariadb-operator"),
 				},
 			},
 		},
@@ -1104,8 +1704,12 @@ func TestManagedComponents(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			rsp := &fnv1.RunFunctionResponse{}
+			in := tc.args.res
+			if in == nil {
+				in = res
+			}
 
-			got := managedComponents(rsp, res, tc.args.in)
+			got := managedComponents(rsp, in, tc.args.in, registry)
 
 			if diff := cmp.Diff(tc.want.managed, slices.Sorted(maps.Keys(got))); diff != "" {
 				t.Errorf("%s\nmanagedComponents(...): -want managed, +got managed:\n%s", tc.reason, diff)
@@ -1167,9 +1771,9 @@ func TestDeployed(t *testing.T) {
 			want:   want{deployed: []string{chartBacked}},
 		},
 		"ManifestOnlyWithoutObjects": {
-			reason: "A manifest-only component that emitted no Objects has nothing to withhold and counts as deployed.",
+			reason: "A manifest-only component whose manifest files rendered no document composes nothing, so there is nothing of it to report as deployed.",
 			args:   args{desired: desiredOf(chartBacked), objects: manifestObjects{}},
-			want:   want{deployed: []string{manifestOnly, chartBacked}},
+			want:   want{deployed: []string{chartBacked}},
 		},
 	}
 
@@ -1179,6 +1783,120 @@ func TestDeployed(t *testing.T) {
 			got := s.deployed(order)
 			if diff := cmp.Diff(tc.want.deployed, got); diff != "" {
 				t.Errorf("%s\ndeployed(...): -want, +got:\n%s", tc.reason, diff)
+			}
+		})
+	}
+}
+
+func TestSummary(t *testing.T) {
+	const (
+		crds      = "prometheus-operator-crds"
+		operator  = "gpu-operator"
+		scheduler = "kai-scheduler"
+		tuning    = "nodewright-customizations"
+		labeler   = "dra-node-labeler"
+		tuningCR  = "nodewright-customizations-post-nodewright-tuning"
+	)
+	managed := map[string]*recipe.ComponentRef{
+		crds:      {Name: crds, Type: recipe.ComponentTypeHelm, Namespace: "monitoring", Version: "28.0.1", Source: "https://example.com", Chart: crds},
+		operator:  {Name: operator, Type: recipe.ComponentTypeHelm, Namespace: "gpu-operator", Version: "v26.7.2", Source: "https://example.com", Chart: operator},
+		scheduler: {Name: scheduler, Type: recipe.ComponentTypeHelm, Namespace: "kai-scheduler", Version: "v0.16.9", Source: "https://example.com", Chart: scheduler},
+		tuning:    {Name: tuning, Type: recipe.ComponentTypeHelm, Namespace: "nodewright", ManifestFiles: []string{"tuning.yaml"}},
+		// Manifest-only, and its one manifest file rendered no document.
+		labeler: {Name: labeler, Type: recipe.ComponentTypeHelm, Namespace: "gpu-operator", ManifestFiles: []string{"labeler.yaml"}},
+	}
+	criteria := &recipe.Criteria{Accelerator: "h100", Service: "eks", Intent: "training"}
+	desiredOf := func(names ...string) map[resource.Name]*resource.DesiredComposed {
+		d := make(map[resource.Name]*resource.DesiredComposed, len(names))
+		for _, n := range names {
+			d[resource.Name(n)] = &resource.DesiredComposed{Resource: composed.New()}
+		}
+		return d
+	}
+
+	type args struct {
+		s   *stack
+		res *recipe.RecipeResult
+	}
+	type want struct {
+		summary map[string]any
+	}
+
+	cases := map[string]struct {
+		reason string
+		args   args
+		want   want
+	}{
+		"MidRollout": {
+			reason: "Deployed components carry the version and namespace they are deployed with, an override and a kept namespace included; withheld ones are pending with what they wait for; a component that composes nothing is neither listed nor counted.",
+			args: args{
+				s: &stack{
+					managed:      managed,
+					desired:      desiredOf(crds, operator),
+					objects:      manifestObjects{post: map[string][]string{tuning: {tuningCR}}},
+					overrides:    map[string]*compose.Override{operator: {Version: "v99.0.0", Namespace: "nvidia"}},
+					waiting:      map[string]string{scheduler: operator, tuning: "nodewright-operator"},
+					recipeSource: "ghcr.io/acme/aicr-recipes@sha256:8ac7",
+				},
+				res: &recipe.RecipeResult{
+					DeploymentOrder: []string{crds, operator, labeler, scheduler, tuning, "skipped"},
+					Metadata: recipe.RecipeResultMetadata{
+						Version:         "v1.3.0",
+						SelectedProfile: &recipe.SelectedProfile{Name: "gpuStack", Value: "dra"},
+						AppliedOverlays: []string{"base", "eks", "h100-eks-training"},
+					},
+				},
+			},
+			want: want{summary: map[string]any{
+				"recipeName":      "h100-eks-training",
+				"recipeVersion":   "v1.3.0",
+				"recipeSource":    "ghcr.io/acme/aicr-recipes@sha256:8ac7",
+				"profile":         "gpuStack=dra",
+				"appliedOverlays": []string{"base", "eks", "h100-eks-training"},
+				"componentCount":  4,
+				"deployedComponents": []map[string]string{
+					{"name": crds, "version": "28.0.1", "namespace": "monitoring"},
+					{"name": operator, "version": "v99.0.0", "namespace": "nvidia"},
+				},
+				"pendingComponents": []map[string]string{
+					{"name": scheduler, "waitingFor": operator},
+					{"name": tuning, "waitingFor": "nodewright-operator"},
+				},
+			}},
+		},
+		"EverythingDeployed": {
+			reason: "With nothing withheld the pending list is empty rather than absent, a manifest-only component is listed without a version, and a recipe without a profile, overlays or an OCI source omits those keys.",
+			args: args{
+				s: &stack{
+					managed: managed,
+					desired: desiredOf(crds, operator, scheduler, tuningCR),
+					objects: manifestObjects{post: map[string][]string{tuning: {tuningCR}}},
+				},
+				res: &recipe.RecipeResult{
+					DeploymentOrder: []string{crds, operator, labeler, scheduler, tuning},
+					Metadata:        recipe.RecipeResultMetadata{Version: "v1.3.0"},
+				},
+			},
+			want: want{summary: map[string]any{
+				"recipeName":     "h100-eks-training",
+				"recipeVersion":  "v1.3.0",
+				"componentCount": 4,
+				"deployedComponents": []map[string]string{
+					{"name": crds, "version": "28.0.1", "namespace": "monitoring"},
+					{"name": operator, "version": "v26.7.2", "namespace": "gpu-operator"},
+					{"name": scheduler, "version": "v0.16.9", "namespace": "kai-scheduler"},
+					{"name": tuning, "namespace": "nodewright"},
+				},
+				"pendingComponents": []map[string]string{},
+			}},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := tc.args.s.summary(criteria, tc.args.res)
+			if diff := cmp.Diff(tc.want.summary, got); diff != "" {
+				t.Errorf("%s\nsummary(...): -want, +got:\n%s", tc.reason, diff)
 			}
 		})
 	}

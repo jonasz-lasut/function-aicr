@@ -4,7 +4,7 @@ import (
 	"maps"
 	"strings"
 
-	"github.com/NVIDIA/aicr/pkg/recipe"
+	"aicr.run/pkg/recipe"
 )
 
 // The composed provider-helm Release GVK. Namespaced, so it can be composed by
@@ -67,9 +67,19 @@ func NewRelease(c *recipe.ComponentRef, values map[string]any, ov *Override, pcR
 // deployed with: the recipe's, with any override applied. Both the Release and
 // the component's manifests derive from these, so they cannot disagree.
 func effective(c *recipe.ComponentRef, values map[string]any, ov *Override) (namespace, version string, effectiveValues map[string]any) {
+	namespace, version = Placement(c, ov)
+	if ov != nil && ov.Values != nil {
+		values = MergeValues(values, ov.Values)
+	}
+	return namespace, version, values
+}
+
+// Placement returns the namespace and chart version a component is deployed
+// with: the recipe's, with any override applied.
+func Placement(c *recipe.ComponentRef, ov *Override) (namespace, version string) {
 	namespace, version = c.Namespace, c.Version
 	if ov == nil {
-		return namespace, version, values
+		return namespace, version
 	}
 	if ov.Namespace != "" {
 		namespace = ov.Namespace
@@ -77,10 +87,7 @@ func effective(c *recipe.ComponentRef, values map[string]any, ov *Override) (nam
 	if ov.Version != "" {
 		version = ov.Version
 	}
-	if ov.Values != nil {
-		values = MergeValues(values, ov.Values)
-	}
-	return namespace, version, values
+	return namespace, version
 }
 
 func providerConfigRef(pcRef ProviderConfigRef) map[string]any {

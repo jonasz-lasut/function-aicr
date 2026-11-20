@@ -31,10 +31,10 @@ spec:
         env: []
       driver:
         enabled: false
+        kernelModuleType: auto
         maxParallelUpgrades: 5
         rdma:
           enabled: false
-        useOpenKernelModules: true
         version: "999"
       fullnameOverride: gpu-operator
       gdrcopy:
