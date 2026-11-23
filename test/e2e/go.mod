@@ -3,8 +3,8 @@ module github.com/jonasz-lasut/function-aicr/test/e2e
 go 1.27.4
 
 require (
-	github.com/crossplane/crossplane/apis/v2 v2.5.0-rc.1
-	github.com/crossplane/crossplane/v2 v2.5.0-rc.1
+	github.com/crossplane/crossplane/apis/v2 v2.5.0
+	github.com/crossplane/crossplane/v2 v2.5.0
 	k8s.io/api v0.37.2
 	k8s.io/apimachinery v0.37.2
 	k8s.io/client-go v0.37.2
@@ -21,7 +21,7 @@ require (
 	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/chai2010/gettext-go v1.0.2 // indirect
-	github.com/crossplane/crossplane-runtime/v2 v2.5.0-rc.1 // indirect
+	github.com/crossplane/crossplane-runtime/v2 v2.5.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
 	github.com/evanphx/json-patch/v5 v5.9.11 // indirect
