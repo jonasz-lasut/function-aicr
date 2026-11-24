@@ -38,13 +38,13 @@ endif
 KIND_CLUSTER_NAME ?= function-aicr-e2e-$(E2E_PROFILE)
 # The chart version, so without the release tag's `v`.
 # renovate: datasource=github-releases depName=crossplane/crossplane extractVersion=^v(?<version>.*)$
-CROSSPLANE_VERSION ?= 2.4.3
+CROSSPLANE_VERSION ?= 2.5.0
 # renovate: datasource=github-releases depName=crossplane-contrib/provider-helm
 PROVIDER_HELM_VERSION ?= v1.5.0
 # renovate: datasource=github-releases depName=crossplane-contrib/provider-kubernetes
 PROVIDER_KUBERNETES_VERSION ?= v1.4.1
 # renovate: datasource=github-releases depName=crossplane-contrib/function-auto-ready
-FUNCTION_AUTO_READY_VERSION ?= v0.7.3
+FUNCTION_AUTO_READY_VERSION ?= v0.7.4
 # renovate: datasource=docker depName=registry
 REGISTRY_VERSION ?= 3.1.2
 # The release without its tag's `v`, as the archive is named.
