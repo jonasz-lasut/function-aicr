@@ -44,7 +44,7 @@ PROVIDER_HELM_VERSION ?= v1.5.0
 # renovate: datasource=github-releases depName=crossplane-contrib/provider-kubernetes
 PROVIDER_KUBERNETES_VERSION ?= v1.4.1
 # renovate: datasource=github-releases depName=crossplane-contrib/function-auto-ready
-FUNCTION_AUTO_READY_VERSION ?= v0.7.4
+FUNCTION_AUTO_READY_VERSION ?= v0.7.5
 # renovate: datasource=docker depName=registry
 REGISTRY_VERSION ?= 3.1.2
 # The release without its tag's `v`, as the archive is named.
